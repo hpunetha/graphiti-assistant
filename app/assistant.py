@@ -208,8 +208,16 @@ async def main() -> None:
     print("\n" + "=" * 60)
     print("  MedBook -- Doctor Appointment Booking Assistant")
     print("=" * 60)
-    print("\nType your message to start booking an appointment.")
-    print("Type 'quit' to exit, 'reset' to start a new conversation.\n")
+    print("\nType 'quit' to exit, 'reset' to start a new conversation.\n")
+
+    WELCOME_MESSAGE = (
+        "Welcome to City Care Hospital! 🏥\n"
+        "I'm MedBook, your appointment booking assistant.\n"
+        "How may I help you today? You can tell me your symptoms, "
+        "name a doctor or speciality, or ask to see your existing bookings."
+    )
+    print(f"bot > {WELCOME_MESSAGE}\n")
+    log.info("Welcome message displayed to user.")
 
     try:
         while True:
