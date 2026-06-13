@@ -93,19 +93,25 @@ class HospitalDB:
         self,
         doctor_record_id: int,
         date: str,
-        limit: int = 20,
+        limit: int = 70,
+        after_time: str | None = None,
+        before_time: str | None = None,
     ) -> list[dict]:
         """Get available slots for a doctor on a specific date.
 
         Args:
             doctor_record_id: The doctor's ID.
             date: Date string in YYYY-MM-DD format.
-            limit: Max number of slots to return.
+            limit: Max number of slots to return (default 70 covers full 10-hr day).
+            after_time: HH:MM string — only return slots starting at or after this time.
+            before_time: HH:MM string — only return slots starting before this time.
         """
         query = """
         MATCH (d:Doctor {doctor_record_id: $doctor_record_id})-[:HAS_SLOT]->(s:Slot)
         WHERE s.appointment_date = $date
           AND s.slot_status = 'AVAILABLE'
+          AND ($after_time IS NULL OR s.slot_start >= $after_time)
+          AND ($before_time IS NULL OR s.slot_start < $before_time)
         RETURN s {.*, doctor_name: d.name, speciality: d.speciality} AS slot
         ORDER BY s.slot_start
         LIMIT $limit
@@ -116,6 +122,8 @@ class HospitalDB:
                 doctor_record_id=doctor_record_id,
                 date=date,
                 limit=limit,
+                after_time=after_time,
+                before_time=before_time,
             )
             records = await result.data()
             return [r["slot"] for r in records]

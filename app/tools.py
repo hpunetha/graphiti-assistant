@@ -18,11 +18,20 @@ Tools:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.db import HospitalDB
 from app.memory import GraphMemory
+
+# Time-of-day slot buckets (HH:MM strings, lexicographic comparison works for HH:MM)
+TIME_BUCKETS: dict[str, tuple[str, str]] = {
+    "morning":   ("09:00", "12:00"),   # before noon
+    "afternoon": ("12:00", "17:00"),   # noon to 5 PM
+    "evening":   ("17:00", "19:00"),   # 5 PM to 7 PM
+}
 
 # ──────────────────────────────────────────────────────────────────────
 # OpenAI function-calling tool schemas
@@ -35,9 +44,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "identify_patient",
             "description": (
                 "Look up a patient by phone number. If the patient exists, "
-                "returns their profile. If not, registers a new patient with "
-                "the provided name, age, and gender. Always call this first "
-                "to identify who is booking."
+                "returns their profile. If not found, ask for name, age, and gender "
+                "ONE AT A TIME across separate turns if needed — do NOT demand all three "
+                "at once. Call this tool again once you have all three to register them."
             ),
             "parameters": {
                 "type": "object",
@@ -124,7 +133,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Get available appointment slots for a specific doctor on a "
                 "specific date. Returns slot IDs, start/end times. Only shows "
-                "slots with status AVAILABLE."
+                "slots with status AVAILABLE. Optionally filter by time_of_day "
+                "(morning/afternoon/evening) or let the user specify an exact time."
             ),
             "parameters": {
                 "type": "object",
@@ -136,6 +146,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "date": {
                         "type": "string",
                         "description": "Date in YYYY-MM-DD format (e.g., '2026-06-15')",
+                    },
+                    "time_of_day": {
+                        "type": "string",
+                        "enum": ["morning", "afternoon", "evening"],
+                        "description": (
+                            "Optional time-of-day bucket: "
+                            "'morning' (before 12:00), "
+                            "'afternoon' (12:00-17:00), "
+                            "'evening' (17:00-19:00). "
+                            "Omit to return all available slots."
+                        ),
                     },
                 },
                 "required": ["doctor_record_id", "date"],
@@ -373,14 +394,43 @@ async def _get_available_slots(
     db: HospitalDB,
     doctor_record_id: int,
     date: str,
+    time_of_day: str | None = None,
 ) -> dict:
-    """Get available slots for a doctor on a date."""
-    slots = await db.get_available_slots(doctor_record_id, date)
+    """Get available slots for a doctor on a date, with optional time-of-day filtering.
+
+    Filters out past slots automatically when the requested date is today
+    (using APP_TIMEZONE, default Asia/Kolkata).
+    """
+    tz_name = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    today_str = now.strftime("%Y-%m-%d")
+    current_time = now.strftime("%H:%M")
+    is_today = (date == today_str)
+
+    # Resolve time-of-day bucket to (after_time, before_time)
+    after_time: str | None = None
+    before_time: str | None = None
+    if time_of_day and time_of_day in TIME_BUCKETS:
+        after_time, before_time = TIME_BUCKETS[time_of_day]
+
+    # For today: ensure we never show already-passed slots
+    if is_today:
+        # Push after_time forward to current time if needed
+        if after_time is None or current_time > after_time:
+            after_time = current_time
+
+    slots = await db.get_available_slots(
+        doctor_record_id, date,
+        after_time=after_time,
+        before_time=before_time,
+    )
 
     if not slots:
+        bucket_label = f" in the {time_of_day}" if time_of_day else ""
         return {
-            "message": f"No available slots for this doctor on {date}.",
-            "suggestion": "Try a different date or another doctor.",
+            "message": f"No available slots for this doctor on {date}{bucket_label}.",
+            "suggestion": "Try a different date, time of day, or another doctor.",
         }
 
     formatted = []
@@ -396,6 +446,7 @@ async def _get_available_slots(
         "available_slots": formatted,
         "total_available": len(formatted),
         "date": date,
+        "time_of_day_filter": time_of_day or "all",
     }
 
 

@@ -49,7 +49,7 @@ for current_date in pd.date_range(start_date, end_date):
         end_slot = datetime.combine(
             current_date.date(),
             datetime.min.time()
-        ).replace(hour=17, minute=0)
+        ).replace(hour=19, minute=0)  # Extended to 19:00 to include evening slots (17:00-18:50)
 
         while current_slot < end_slot:
 
