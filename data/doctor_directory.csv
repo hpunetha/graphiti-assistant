@@ -1,0 +1,12 @@
+doctor_record_id,doctor_name,speciality,location,sublocation,gender,qualification,languages_spoken,YOE,is_active
+1,Dr. Asha Mehta,Gynecology,Noida,Okhla,Female,"MBBS, MS (Obstetrics & Gynecology)","English, Hindi",23+ years Experience,Yes
+2,Dr. Neha Kapoor,Gynecology,Noida,Okhla,Female,"MBBS, MS (OBGY), FRM","English, Hindi",23+ years Experience,Yes
+3,Dr. Ritu Sharma,Gynecology,Noida,Okhla,Female,"MBBS, MS (Obstetrics & Gynecology)","English, Hindi,",22+ years Experience,Yes
+4,Dr. Pooja Verma,Gynecology,Noida,Okhla,Female,"MBBS, MS(OBG), MRCOG (UK)","Telugu, Hindi, English, Tamil, Bengali",18+ years Experience,Yes
+5,Dr. Sneha Gupta,Gynecology,Noida,Okhla,Female,"MBBS, DGO, DNB (OBGY)","English, Hindi",16+ years Experience,Yes
+19,Dr. Rajesh Kumar,General Pediatrics,Noida,Okhla,Male,"MBBS, MD (Pediatrics), MRCPCH, FRCPCH, CCST (UK), Diploma in Allergy (UK)","Hindi, English",29+ years Experience,Yes
+35,Dr. Amit Sharma,General Physician,Noida,Okhla,Male,"MBBS, DNB (Internal Medicine)","Hindi, English",22+ years Experience,Yes
+41,Dr. Kiran Rao,Fetal Medicine & Ultrasonography,Noida,Okhla,Female,"MBBS, DNB (OBGY), FNB (Fellowship of National Board) – Maternal & Fetal Medicine","Hindi, English, Marathi",15+ years Experience,Yes
+58,Dr. Sara Khan,Pediatric Intensive Care Unit (PICU),Noida,Okhla,Female,"MBBS, MD (Pediatrics), Fellow in Critical Care Medicine (Canada Toronto)","Hindi, English",19+ years Experience,Yes
+65,Dr. Vikram Singh,Pediatric Pulmonology,Noida,Okhla,Male,"MBBS, MD (Pediatrics), MRCPCH, FRCPCH, CCST (UK), Diploma in Allergy (UK)","Hindi, English",29+ years Experience,Yes
+69,Dr. Anil Mehta,Pediatric Gastroenterology & Hepat,Noida,Okhla,Male,"MBBS, MD (Pediatrics), PDCC & DM (Pediatric Gastroenterology)","English, Hindi",16+ years Experience,Yes
