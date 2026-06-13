@@ -1,0 +1,8 @@
+# Core: temporal knowledge-graph memory over Neo4j
+graphiti-core>=0.3.0
+
+# LLM client for generating the assistant's replies
+openai>=1.40.0
+
+# Config
+python-dotenv>=1.0.0
