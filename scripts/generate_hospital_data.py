@@ -11,9 +11,20 @@ SLOT_DURATION_MINUTES = 10
 
 doctor_df = pd.read_csv(DOCTOR_FILE)
 
+# Use actual doctor_record_id from the CSV, don't overwrite with sequential IDs
 doctor_id_col = "doctor_record_id"
 
-doctor_df[doctor_id_col] = range(1, len(doctor_df) + 1)
+# Patient pool with demographic data for pre-seeding
+PATIENT_POOL = [
+    {"name": "Rahul Sharma", "gender": "Male", "age_range": (25, 40)},
+    {"name": "Priya Verma", "gender": "Female", "age_range": (22, 38)},
+    {"name": "Amit Singh", "gender": "Male", "age_range": (30, 55)},
+    {"name": "Sneha Gupta", "gender": "Female", "age_range": (20, 35)},
+    {"name": "Anita Desai", "gender": "Female", "age_range": (28, 45)},
+    {"name": "Vikram Patel", "gender": "Male", "age_range": (35, 60)},
+    {"name": "Meera Joshi", "gender": "Female", "age_range": (5, 12)},
+    {"name": "Arjun Reddy", "gender": "Male", "age_range": (2, 8)},
+]
 
 slot_rows = []
 slot_id = 100000
@@ -55,8 +66,8 @@ for current_date in pd.date_range(start_date, end_date):
                 "slot_start": current_slot.strftime("%H:%M"),
                 "slot_end": next_slot.strftime("%H:%M"),
                 "slot_status": random.choices(
-                    ["AVAILABLE", "BOOKED"],
-                    weights=[92, 8],
+                    ["AVAILABLE", "BOOKED", "NOT_AVAILABLE"],
+                    weights=[90, 8, 2],
                     k=1
                 )[0]
             })
@@ -82,27 +93,27 @@ for doctor_id in doctor_df[doctor_id_col].unique():
         continue
 
     sampled = doctor_slots.sample(
-        n=min(random.randint(1,2), len(doctor_slots))
+        n=min(random.randint(1, 3), len(doctor_slots))
     )
 
     for _, row in sampled.iterrows():
 
         booking_id += 1
 
+        patient = random.choice(PATIENT_POOL)
+        patient_age = random.randint(*patient["age_range"])
+
         appointment_rows.append({
             "booking_id": booking_id,
             "slot_id": row["slot_id"],
             "doctor_record_id": row["doctor_record_id"],
-            "patient_name": random.choice([
-                "Rahul Sharma",
-                "Priya Verma",
-                "Amit Singh",
-                "Sneha Gupta"
-            ]),
+            "patient_name": patient["name"],
             "patient_phone": random.randint(
                 7000000000,
                 9999999999
             ),
+            "patient_age": patient_age,
+            "patient_gender": patient["gender"],
             "booking_status": "CONFIRMED",
             "booked_at": datetime.now().strftime(
                 "%Y-%m-%d %H:%M:%S"
@@ -121,4 +132,7 @@ appointment_df.to_csv(
     index=False
 )
 
+print(f"Generated {len(slot_df)} slots across {len(doctor_df)} doctors")
+print(f"Generated {len(appointment_df)} appointment bookings")
+print(f"Slot statuses: {slot_df['slot_status'].value_counts().to_dict()}")
 print("Files generated successfully")

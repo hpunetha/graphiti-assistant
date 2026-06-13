@@ -8,3 +8,6 @@ openai>=1.40.0
 python-dotenv>=1.0.0
 
 pandas>=3.0.3
+
+# Direct Neo4j driver for structured data queries (slots, bookings, patients)
+neo4j>=5.0.0
