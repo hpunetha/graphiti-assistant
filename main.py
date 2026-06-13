@@ -8,11 +8,19 @@ Usage:
     python -m app.assistant            # Run the assistant directly
     python -m app.seed_hospital        # Seed the database directly
     python -m scripts.slot_modifier    # Run the slot modifier in parallel
+
+Logs are written to logs/medbook_YYYYMMDD.log (DEBUG+) and printed to
+the console at INFO level. Set APP_TIMEZONE in .env to change the timezone
+(default: Asia/Kolkata).
 """
 
 import argparse
 import asyncio
 import sys
+
+from app.logger import get_logger
+
+log = get_logger("medbook.main")
 
 
 def main():
@@ -31,18 +39,32 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.seed or args.seed_only:
-        print("Seeding hospital data into Neo4j...\n")
-        from app.seed_hospital import main as seed_main
-        asyncio.run(seed_main())
+    log.info("MedBook starting (seed=%s seed_only=%s)", args.seed, args.seed_only)
 
-        if args.seed_only:
-            return
+    try:
+        if args.seed or args.seed_only:
+            print("Seeding hospital data into Neo4j...\n")
+            log.info("Running seed_hospital...")
+            from app.seed_hospital import main as seed_main
+            asyncio.run(seed_main())
+            log.info("Seeding complete.")
 
-        print("\n" + "-" * 60 + "\n")
+            if args.seed_only:
+                log.info("--seed-only mode: exiting after seed.")
+                return
 
-    from app.assistant import main as assistant_main
-    asyncio.run(assistant_main())
+            print("\n" + "-" * 60 + "\n")
+
+        from app.assistant import main as assistant_main
+        asyncio.run(assistant_main())
+
+    except KeyboardInterrupt:
+        print("\n\nInterrupted. Goodbye!")
+        log.info("KeyboardInterrupt at top level — exiting cleanly.")
+        sys.exit(0)
+    except Exception as exc:
+        log.exception("Fatal error in main: %s", exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
