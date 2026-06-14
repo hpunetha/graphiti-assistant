@@ -56,7 +56,7 @@ curl -X POST http://localhost:8000/chat \
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "user_message": "9045873890",
+    "user_message": "8952039590",
     "messages": [/* paste messages array from Turn 1 response */]
   }'
 ```
@@ -67,7 +67,7 @@ curl -X POST http://localhost:8000/chat \
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "user_message": "Himanshu",
+    "user_message": "Harsh",
     "messages": [/* paste messages from Turn 2 */]
   }'
 ```
@@ -127,11 +127,11 @@ wscat -c ws://localhost:8000/ws/chat
 > I have a bad headache
 < {"type":"reply","message":"I'd be happy to help! Could you please share your phone number?"}
 
-> 9045873890
+> 8952039590
 < {"type":"reply","message":"I don't see a profile for this number. What is your full name?"}
 
-> Himanshu
-< {"type":"reply","message":"Thanks Himanshu! What is your age?"}
+> Harsh
+< {"type":"reply","message":"Thanks Harsh! What is your age?"}
 
 > 33
 < {"type":"reply","message":"And your gender?"}
@@ -165,8 +165,8 @@ async def chat():
         # Send messages
         messages = [
             "I have a headache",
-            "9045873890",
-            "Himanshu",
+            "8952039590",
+            "Harsh",
             "33",
             "male",
             "June 16, morning",

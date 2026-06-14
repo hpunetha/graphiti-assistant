@@ -226,7 +226,7 @@ class TestPostChat:
             r2 = client.post(
                 "/chat",
                 json={
-                    "user_message": "9045873890",
+                    "user_message": "8952039590",
                     "messages": messages_after_turn1,
                 },
             )
@@ -313,10 +313,10 @@ class TestWebSocketChat:
                 ws.send_text("I have a headache")
                 r1 = ws.receive_json()
 
-                ws.send_text("9045873890")
+                ws.send_text("8952039590")
                 r2 = ws.receive_json()
 
-                ws.send_text("Himanshu")
+                ws.send_text("Harsh")
                 r3 = ws.receive_json()
 
         assert r1["message"] == "What is your phone number?"
