@@ -58,7 +58,7 @@ graph TB
 
 ## 🛠️ Agent Tools
 
-The LLM has access to 9 specialized tools via OpenAI function calling:
+The LLM has access to 11 specialized tools via OpenAI function calling:
 
 | Tool | What it does | Key Detail |
 |---|---|---|
@@ -71,6 +71,16 @@ The LLM has access to 9 specialized tools via OpenAI function calling:
 | `get_my_bookings` | List patient's bookings | Shows confirmed + cancelled appointments |
 | `reschedule_booking` | Move booking to a new slot | Atomic cancellation and rebooking in one transaction |
 | `cancel_booking` | Cancel a booking, free the slot | Verifies phone ownership before cancelling |
+| `record_patient_fact`| Saves long-term patient facts (allergies, preferences, relationships) | Uses Graphiti temporal memory |
+| `recall_patient_history` | Retrieves a patient's historical profile | Uses Graphiti semantic recall |
+
+---
+
+## 🧠 Dynamic Patient Memory
+
+MedBook uses **Graphiti** to track evolving patient health, preferences, and relationships over time. Unlike transactional data (which uses Neo4j directly), semantic facts like "I am allergic to penicillin", "I prefer evening appointments", or "I am booking for my child" are saved into the patient's individual namespace in Graphiti via explicitly controlled agent tools (`record_patient_fact`). 
+
+When a patient connects, the agent can use `recall_patient_history` to understand their context and proactively cater to their preferences.
 
 ---
 
