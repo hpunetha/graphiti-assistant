@@ -416,6 +416,6 @@ class HospitalDB:
             return [r["slot"] for r in records]
 
     async def clear_all_data(self) -> None:
-        """Delete all nodes and relationships. Used during re-seeding."""
+        """Delete all hospital nodes and relationships. Preserves Graphiti data."""
         async with self._driver.session() as session:
-            await session.run("MATCH (n) DETACH DELETE n")
+            await session.run("MATCH (n) WHERE labels(n) IN [['Doctor'], ['Slot'], ['Booking'], ['Patient']] DETACH DELETE n")

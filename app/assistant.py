@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-from app.db import HospitalDB
+from app.api_client import HospitalApiClient
 from app.llm import LLM
 from app.logger import get_logger
 from app.memory import GraphMemory, quiet_graphiti_logs
@@ -71,6 +71,7 @@ Today's date is {today}. Current time is {current_time} ({timezone}).
 4. **Book the appointment** — When they choose a slot, use book_appointment.
    If the slot is no longer available (someone else booked it or the clinic
    blocked it), apologize and show updated availability.
+   CRITICAL: Carefully map the user's chosen time to the exact `slot_id` from your previous `get_available_slots` results. Do not guess the `slot_id`!
 
 ## Important Rules
 - Be warm and conversational, but concise.
@@ -89,7 +90,7 @@ MAX_TOOL_ITERATIONS = 10  # Safety limit for the agent loop
 
 async def agent_loop(
     llm: LLM,
-    db: HospitalDB,
+    db: HospitalApiClient,
     memory: GraphMemory,
     messages: list[dict],
     user_message: str,
@@ -180,16 +181,17 @@ async def main() -> None:
     if not os.environ.get("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY in your .env file first.")
 
-    log.info("Starting MedBook assistant (Neo4j: %s)", uri)
+    hospital_api_url = os.environ.get("HOSPITAL_API_URL", "http://localhost:8001")
+    log.info("Starting MedBook assistant (API: %s)", hospital_api_url)
 
-    db = HospitalDB(uri, user, password)
+    db = HospitalApiClient(hospital_api_url)
     memory = GraphMemory(uri, user, password)
     llm = LLM()
 
-    print("Connecting to Neo4j...")
+    print("Connecting to API and Neo4j...")
     await db.connect()
     await memory.setup()
-    log.info("Connected to Neo4j and Graphiti memory.")
+    log.info("Connected to Hospital API and Graphiti memory.")
 
     # Initialize conversation with system prompt
     tz_name = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")

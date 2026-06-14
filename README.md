@@ -14,36 +14,37 @@ It demonstrates a **dual-layer architecture**:
 graph TB
     subgraph "Patient Interface"
         CLI["CLI Chat<br/>(STT/TTS-ready)"]
-        API["FastAPI<br/>REST + WebSocket"]
+        API["MedBook API<br/>FastAPI REST + WS"]
     end
 
-    subgraph "Agentic Core"
+    subgraph "Agentic Core (medbook-api)"
         AGENT["Agent Loop<br/>assistant.py"]
         LLM_MOD["LLM<br/>llm.py"]
         TOOLS["Tool Registry<br/>tools.py"]
+        GRAPHITI["Graphiti KG<br/>memory.py"]
+        API_CLIENT["HospitalApiClient<br/>api_client.py"]
+        
         AGENT --> LLM_MOD
         AGENT --> TOOLS
+        TOOLS --> API_CLIENT
+        TOOLS --> GRAPHITI
+    end
+
+    subgraph "Hospital Core (hospital-api)"
+        HOSPITAL_API["FastAPI REST<br/>main.py"]
+        DB["HospitalDB<br/>db.py (Cypher)"]
+        HOSPITAL_API --> DB
     end
 
     subgraph "Data Layer"
-        DB["HospitalDB<br/>db.py<br/>(Cypher queries)"]
-        GRAPHITI["Graphiti KG<br/>memory.py<br/>(Semantic search)"]
-        NEO4J[(Neo4j)]
-    end
-
-    subgraph "Parallel Process"
-        MOD["slot_modifier.py"]
+        NEO4J[(Neo4j Container)]
     end
 
     CLI --> |text| AGENT
     API --> |text| AGENT
-    AGENT --> |response| CLI
-    AGENT --> |response| API
-    TOOLS --> DB
-    TOOLS --> GRAPHITI
-    DB --> NEO4J
-    GRAPHITI --> NEO4J
-    MOD --> |updates slots| NEO4J
+    API_CLIENT --> |HTTP| HOSPITAL_API
+    GRAPHITI --> |Bolt| NEO4J
+    DB --> |Bolt| NEO4J
 ```
 
 ### How the Agent Loop Works:
@@ -88,9 +89,11 @@ docker compose up -d
 *(Neo4j Browser will be available at http://localhost:7474)*
 
 ### 2. Install Dependencies
+This project uses `uv` for fast dependency management.
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+*(Alternatively, you can use `pip install -r requirements.txt`)*
 
 ### 3. Configure Environment
 Copy the example config and add your OpenAI API key.
@@ -106,39 +109,29 @@ Edit `.env` and set:
 
 You have a unified entry point `main.py` that handles both database seeding and running the interactive assistant.
 
-### Step 1: Generate Data & Seed the Database
-First, generate the synthetic hospital data CSVs, and then seed the Neo4j database and Graphiti Knowledge Graph. This creates doctors, ~27K slots, symptom mappings, and routing rules.
+### Step 1: Generate Data & Start Services
+First, generate the synthetic hospital data CSVs, and then start the Neo4j database and APIs using Docker Compose. The APIs must be running for the seeding process.
 
 ```bash
 # Generate CSVs (only needed once or if data schema changes)
 python -m scripts.generate_hospital_data
 
-# Seed Neo4j & Graphiti (clears existing data first)
-python main.py --seed-only
-```
-*Note: Seeding takes a few minutes as it makes several LLM calls to build the Graphiti Knowledge Graph.*
-
-### Step 2: Run the Assistant
-You have two options for running the interactive assistant:
-
-**Option A: Command Line Interface (CLI)**
-Start the interactive CLI agent directly:
-```bash
-python main.py
-```
-You can chat naturally. Try describing symptoms, asking for specific doctors, checking slots, and booking or rescheduling appointments.
-
-**Option B: FastAPI + WebSocket Layer**
-If you want to run the assistant as a backend service, you can start the FastAPI layer using the `api` Docker profile:
-```bash
+# Start Neo4j, hospital-api, and medbook-api
 docker compose --profile api up -d
 ```
-This exposes:
-- **`GET /health`**: Liveness check
-- **`POST /chat`**: Stateless REST endpoint for chat
-- **`ws://localhost:8000/ws/chat`**: Stateful WebSocket endpoint for real-time chat sessions
-- **`GET /ws-test`**: Browser-based WebSocket chat tester UI (open in any browser — no tools needed)
-- **`GET /docs`**: Auto-generated Swagger UI for HTTP endpoints
+*(Neo4j Browser will be available at http://localhost:7474)*
+
+### Step 2: Seed the Database and Knowledge Graph
+With the services running, seed the Neo4j database with structural data (doctors, slots) and then build the Graphiti Knowledge Graph (which fetches data from the running `hospital-api`).
+
+```bash
+# 1. Seed Neo4j with structural hospital data (doctors, ~27K slots, bookings)
+python -m hospital_api.seed
+
+# 2. Seed Graphiti Knowledge Graph (symptom mappings, routing rules, semantic profiles)
+python main.py --seed-only
+```
+*Note: Seeding Graphiti takes a few minutes as it makes several LLM calls to build the semantic indices.*
 
 ### Step 3: Simulate Real-World Schedule Changes (Optional)
 In a separate terminal window, run the slot modifier script. This simulates real-world events by randomly blocking, walk-in booking, or reopening slots every few seconds.

@@ -224,10 +224,15 @@ http://localhost:8000/ws-test
 
 This page lets you interact with the `/ws/chat` endpoint directly from the browser without any external tools.
 
-### Features
-- 🔌 **Connect / Disconnect** button with live status indicator and session ID display
-- 💬 **Chat bubbles** — distinct styling for bot replies, user messages, system events, and errors
-- ⏳ **Typing indicator** — animated dots while the agent is processing
-- ⚡ **Quick message sidebar** — one-click buttons for each booking flow step (symptom, phone, name, age, gender, date)
-- 🔄 **Reset** button — clears server-side session context
-- ⌨️ `Enter` to send, `Shift+Enter` for a newline
+---
+
+## 8. Hospital API (Data endpoints)
+The raw hospital operations run on port `8001` (if using Docker Compose).
+These endpoints manage the structured Neo4j database natively:
+
+| Method | URL | Description |
+|--------|-----|-------------|
+| `GET` | `http://localhost:8001/doctors` | List specialities or search doctors (`?speciality=` or `?name=`) |
+| `GET` | `http://localhost:8001/slots` | Get available slots for a doctor |
+| `POST` | `http://localhost:8001/bookings` | Book a slot |
+| `POST` | `http://localhost:8001/patients` | Register a new patient |
