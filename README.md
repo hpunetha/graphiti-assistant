@@ -14,6 +14,7 @@ It demonstrates a **dual-layer architecture**:
 graph TB
     subgraph "Patient Interface"
         CLI["CLI Chat<br/>(STT/TTS-ready)"]
+        API["FastAPI<br/>REST + WebSocket"]
     end
 
     subgraph "Agentic Core"
@@ -34,13 +35,15 @@ graph TB
         MOD["slot_modifier.py"]
     end
 
-    CLI -->|text| AGENT
-    AGENT -->|response| CLI
+    CLI --> |text| AGENT
+    API --> |text| AGENT
+    AGENT --> |response| CLI
+    AGENT --> |response| API
     TOOLS --> DB
     TOOLS --> GRAPHITI
     DB --> NEO4J
     GRAPHITI --> NEO4J
-    MOD -->|updates slots| NEO4J
+    MOD --> |updates slots| NEO4J
 ```
 
 ### How the Agent Loop Works:
@@ -54,7 +57,7 @@ graph TB
 
 ## 🛠️ Agent Tools
 
-The LLM has access to 7 specialized tools via OpenAI function calling:
+The LLM has access to 9 specialized tools via OpenAI function calling:
 
 | Tool | What it does | Key Detail |
 |---|---|---|
@@ -62,8 +65,10 @@ The LLM has access to 7 specialized tools via OpenAI function calling:
 | `search_doctors` | Find doctors by speciality or name | Case-insensitive partial match |
 | `suggest_speciality` | Symptom → speciality recommendation | Semantic search via Graphiti + LLM reasoning |
 | `get_available_slots`| Available slots for a doctor + date | Real-time query (reflects live modifier changes) |
+| `get_next_available_date`| Finds next date with open slots | Single Cypher query, avoids LLM guessing dates |
 | `book_appointment` | Atomically book a slot | Single Cypher write transaction preventing double-booking |
 | `get_my_bookings` | List patient's bookings | Shows confirmed + cancelled appointments |
+| `reschedule_booking` | Move booking to a new slot | Atomic cancellation and rebooking in one transaction |
 | `cancel_booking` | Cancel a booking, free the slot | Verifies phone ownership before cancelling |
 
 ---
@@ -114,11 +119,24 @@ python main.py --seed-only
 *Note: Seeding takes a few minutes as it makes several LLM calls to build the Graphiti Knowledge Graph.*
 
 ### Step 2: Run the Assistant
-Start the interactive CLI agent.
+You have two options for running the interactive assistant:
+
+**Option A: Command Line Interface (CLI)**
+Start the interactive CLI agent directly:
 ```bash
 python main.py
 ```
-You can chat naturally. Try describing symptoms ("My child has a fever"), asking for specific doctors ("Do you have any gynecologists?"), checking slots, and booking appointments.
+You can chat naturally. Try describing symptoms, asking for specific doctors, checking slots, and booking or rescheduling appointments.
+
+**Option B: FastAPI + WebSocket Layer**
+If you want to run the assistant as a backend service, you can start the FastAPI layer using the `api` Docker profile:
+```bash
+docker compose --profile api up -d
+```
+This exposes:
+- **`GET /health`**: Liveness check
+- **`POST /chat`**: Stateless REST endpoint for chat
+- **`ws://localhost:8000/ws/chat`**: Stateful WebSocket endpoint for real-time chat sessions
 
 ### Step 3: Simulate Real-World Schedule Changes (Optional)
 In a separate terminal window, run the slot modifier script. This simulates real-world events by randomly blocking, walk-in booking, or reopening slots every few seconds.
@@ -136,7 +154,36 @@ To ensure your database is seeded correctly and all tools function as expected, 
 ```bash
 python -m scripts.smoke_test
 ```
-This runs an end-to-end test of all 7 tools without the chat loop, verifying patient lookup, semantic search, slot querying, and atomic booking.
+This runs an end-to-end test of all 9 tools without the chat loop, verifying patient lookup, semantic search, slot querying, and atomic booking.
+
+---
+
+## 🧪 API Tests
+
+Unit tests for the FastAPI endpoints are in `tests/test_api.py`. They use `pytest` and FastAPI's `TestClient`, and run **entirely offline** — no Neo4j or OpenAI connection needed (all external calls are mocked).
+
+### Run tests
+```bash
+uv run pytest tests/ -v
+```
+
+### Test coverage
+
+| Suite | Tests | What is verified |
+|---|---|---|
+| `TestHealth` | 2 | `/health` returns `{"status": "ok"}` with `neo4j` field |
+| `TestPostChat` | 9 | Fresh session, messages array structure, valid roles, prior context passthrough, user message appended, empty message, exception handling, multi-turn growth, 422 on missing field |
+| `TestWebSocketChat` | 9 | Connect + unique session ID, greeting type, send/receive reply, reset command, case-insensitive reset, multi-turn context, error type on exception, unique IDs per connection, reset-then-continue |
+| `TestDocs` | 2 | Swagger UI accessible, OpenAPI schema contains expected paths |
+
+> **Note:** The one pydantic deprecation warning comes from `graphiti_core` internals — nothing to fix on your end.
+
+### Test dependencies
+Test-only deps are tracked under `[dependency-groups] dev` in `pyproject.toml` and are not installed in production:
+```
+pytest>=9.1.0
+httpx2>=2.4.0
+```
 
 ---
 
@@ -242,13 +289,29 @@ This means you can easily swap the CLI `input()` and `print()` statements with S
 
 ## 📂 Project Structure
 
-- `app/assistant.py` - The agentic tool-calling loop and CLI interface.
-- `app/db.py` - Async Neo4j access layer handling transactional Cypher queries (atomic bookings, slot queries, etc.).
-- `app/llm.py` - Minimal OpenAI client wrapped with function-calling support.
-- `app/memory.py` - The semantic graph-memory layer over `graphiti-core`.
-- `app/seed_hospital.py` - Script to clear the DB, load structured CSV data, and seed Graphiti.
-- `app/tools.py` - OpenAI function-calling tool definitions and the execution dispatcher.
-- `scripts/generate_hospital_data.py` - Generates synthetic slots and bookings CSVs.
-- `scripts/slot_modifier.py` - Parallel script simulating real-time schedule changes.
-- `scripts/smoke_test.py` - Automated tool verification tests.
-- `data/symptom_speciality_map.csv` - Curated mapping of symptoms to medical specialities.
+```
+.
+├── app/
+│   ├── api.py              # FastAPI app — REST (POST /chat) + WebSocket (/ws/chat)
+│   ├── assistant.py        # Agentic tool-calling loop + CLI interface
+│   ├── db.py               # Async Neo4j layer for Cypher queries (atomic bookings, slots)
+│   ├── llm.py              # Thin OpenAI client with function-calling support
+│   ├── memory.py           # Semantic graph-memory layer (graphiti-core)
+│   ├── seed_hospital.py    # Seeds Neo4j + Graphiti from CSV data
+│   └── tools.py            # Tool schemas + execution dispatcher (9 tools)
+├── scripts/
+│   ├── generate_hospital_data.py  # Generates synthetic doctor/slot CSVs
+│   ├── slot_modifier.py           # Simulates real-time schedule changes
+│   └── smoke_test.py              # End-to-end tool verification (no chat loop)
+├── tests/
+│   ├── conftest.py         # Suppresses FastAPI lifespan for offline testing
+│   └── test_api.py         # 22 unit tests for REST + WebSocket endpoints
+├── data/
+│   └── symptom_speciality_map.csv  # Symptom → speciality curated mapping
+├── api_usage_guide.md      # Full API usage guide with mock conversation examples
+├── docker-compose.yml      # Neo4j + optional FastAPI API service
+├── Dockerfile              # Container definition for the FastAPI service
+├── main.py                 # Unified entry point (seed or run CLI)
+├── pyproject.toml          # Project metadata + pytest config
+└── requirements.txt        # Runtime + dev dependencies
+```
