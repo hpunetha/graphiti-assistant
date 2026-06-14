@@ -128,6 +128,42 @@ class HospitalDB:
             records = await result.data()
             return [r["slot"] for r in records]
 
+    async def get_next_available_date(
+        self,
+        doctor_record_id: int,
+        from_date: str,
+        after_time: str | None = None,
+        before_time: str | None = None,
+    ) -> str | None:
+        """Find the nearest future date that has at least one AVAILABLE slot.
+
+        Args:
+            doctor_record_id: The doctor's ID.
+            from_date: Date string in YYYY-MM-DD format (start searching from here, inclusive).
+            after_time: Optional HH:MM start time filter.
+            before_time: Optional HH:MM end time filter.
+        """
+        query = """
+        MATCH (d:Doctor {doctor_record_id: $doctor_record_id})-[:HAS_SLOT]->(s:Slot)
+        WHERE s.appointment_date >= $from_date
+          AND s.slot_status = 'AVAILABLE'
+          AND ($after_time IS NULL OR s.slot_start >= $after_time)
+          AND ($before_time IS NULL OR s.slot_start < $before_time)
+        RETURN s.appointment_date AS next_date
+        ORDER BY s.appointment_date
+        LIMIT 1
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                query,
+                doctor_record_id=doctor_record_id,
+                from_date=from_date,
+                after_time=after_time,
+                before_time=before_time,
+            )
+            record = await result.single()
+            return record["next_date"] if record else None
+
     # ------------------------------------------------------------------
     # Booking operations (atomic)
     # ------------------------------------------------------------------
@@ -219,6 +255,69 @@ class HospitalDB:
             )
             record = await result.single()
             return record is not None
+
+    async def _do_reschedule_booking(self, tx, booking_id: int, patient_phone: str, new_slot_id: int) -> dict | None:
+        """Inner transaction function for atomic slot reschedule."""
+        max_result = await tx.run(
+            "MATCH (b:Booking) RETURN coalesce(max(b.booking_id), 50000) AS max_id"
+        )
+        max_record = await max_result.single()
+        new_id = (max_record["max_id"] if max_record else 50000) + 1
+
+        query = """
+        MATCH (p:Patient {phone: $patient_phone})-[:MADE_BOOKING]->(old_b:Booking {booking_id: $booking_id})
+        MATCH (old_b)-[old_rel:BOOKED_IN]->(old_s:Slot)
+        MATCH (old_b)-[:WITH_DOCTOR]->(d:Doctor)
+        MATCH (new_s:Slot {slot_id: $new_slot_id})
+        WHERE old_b.booking_status = 'CONFIRMED'
+          AND new_s.slot_status = 'AVAILABLE'
+        
+        // Cancel old
+        SET old_b.booking_status = 'CANCELLED',
+            old_s.slot_status = 'AVAILABLE'
+        
+        // Book new
+        SET new_s.slot_status = 'BOOKED'
+        CREATE (new_b:Booking {
+            booking_id: $new_id,
+            booking_status: 'CONFIRMED',
+            booked_at: datetime()
+        })
+        CREATE (p)-[:MADE_BOOKING]->(new_b)
+        CREATE (new_b)-[:BOOKED_IN]->(new_s)
+        CREATE (new_b)-[:WITH_DOCTOR]->(d)
+        
+        RETURN new_b {
+            .*,
+            slot_id: new_s.slot_id,
+            appointment_date: new_s.appointment_date,
+            slot_start: new_s.slot_start,
+            slot_end: new_s.slot_end,
+            doctor_name: d.name,
+            speciality: d.speciality,
+            patient_name: p.name,
+            patient_phone: p.phone
+        } AS booking
+        """
+        result = await tx.run(
+            query,
+            booking_id=booking_id,
+            patient_phone=patient_phone,
+            new_slot_id=new_slot_id,
+            new_id=new_id,
+        )
+        record = await result.single()
+        return record["booking"] if record else None
+
+    async def reschedule_booking(self, booking_id: int, patient_phone: str, new_slot_id: int) -> dict | None:
+        """Atomically reschedule a booking. 
+        Cancels the old one and books the new one in a single transaction.
+        Returns the new booking details, or None if it failed (e.g., new slot taken).
+        """
+        async with self._driver.session() as session:
+            return await session.execute_write(
+                self._do_reschedule_booking, booking_id, patient_phone, new_slot_id
+            )
 
     async def get_patient_bookings(self, phone: str) -> list[dict]:
         """Get all bookings for a patient."""

@@ -6,20 +6,22 @@ function-calling schema is defined here, along with the dispatch function
 that executes tools by name.
 
 Tools:
-    identify_patient     — Look up or register a patient by phone
-    search_doctors       — Find doctors by speciality or name
-    suggest_speciality   — Given symptoms/age/gender, suggest speciality
-    get_available_slots  — List available slots for a doctor on a date
-    book_appointment     — Book a specific slot for a patient
-    get_my_bookings      — List a patient's existing bookings
-    cancel_booking       — Cancel an existing booking
+    identify_patient         — Look up or register a patient by phone
+    search_doctors           — Find doctors by speciality or name
+    suggest_speciality       — Given symptoms/age/gender, suggest speciality
+    get_available_slots      — List available slots for a doctor on a date
+    get_next_available_date  — Find nearest future date with open slots
+    book_appointment         — Book a specific slot for a patient
+    get_my_bookings          — List a patient's existing bookings
+    reschedule_booking       — Atomically move a booking to a new slot
+    cancel_booking           — Cancel an existing booking
 """
 
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -232,6 +234,59 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_next_available_date",
+            "description": (
+                "Find the nearest future date that has available slots for a doctor. "
+                "Use this when the requested date has no slots, instead of guessing dates one by one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "doctor_record_id": {
+                        "type": "integer",
+                        "description": "The doctor's unique record ID",
+                    },
+                    "time_of_day": {
+                        "type": "string",
+                        "enum": ["morning", "afternoon", "evening"],
+                        "description": "Optional time-of-day bucket",
+                    },
+                },
+                "required": ["doctor_record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_booking",
+            "description": (
+                "Atomically reschedule a booking to a new slot. "
+                "If the new slot is unavailable, the old booking is kept intact."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "booking_id": {
+                        "type": "integer",
+                        "description": "The existing booking ID to reschedule",
+                    },
+                    "patient_phone": {
+                        "type": "string",
+                        "description": "The patient's phone number",
+                    },
+                    "new_slot_id": {
+                        "type": "integer",
+                        "description": "The ID of the new slot to book",
+                    },
+                },
+                "required": ["booking_id", "patient_phone", "new_slot_id"],
+            },
+        },
+    },
 ]
 
 
@@ -280,6 +335,10 @@ async def _dispatch(
         return await _get_my_bookings(db, **args)
     elif name == "cancel_booking":
         return await _cancel_booking(db, **args)
+    elif name == "get_next_available_date":
+        return await _get_next_available_date(db, **args)
+    elif name == "reschedule_booking":
+        return await _reschedule_booking(db, **args)
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -526,3 +585,71 @@ async def _cancel_booking(
                 "the phone number doesn't match, or it was already cancelled."
             ),
         }
+
+
+async def _get_next_available_date(
+    db: HospitalDB,
+    doctor_record_id: int,
+    time_of_day: str | None = None,
+) -> dict:
+    """Find the nearest future date with available slots."""
+    tz_name = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    today_str = now.strftime("%Y-%m-%d")
+    current_time = now.strftime("%H:%M")
+
+    after_time: str | None = None
+    before_time: str | None = None
+    if time_of_day and time_of_day in TIME_BUCKETS:
+        after_time, before_time = TIME_BUCKETS[time_of_day]
+
+    # For today check: push after_time if needed
+    today_after_time = after_time
+    if today_after_time is None or current_time > today_after_time:
+        today_after_time = current_time
+
+    # Try today first
+    date = await db.get_next_available_date(
+        doctor_record_id, from_date=today_str, after_time=today_after_time, before_time=before_time
+    )
+
+    if date == today_str:
+        return {"next_available_date": date, "message": "There are slots available today."}
+
+    # If today didn't work, try tomorrow onwards with the original time filter
+    tomorrow_str = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).strftime("%Y-%m-%d")
+    date = await db.get_next_available_date(
+        doctor_record_id, from_date=tomorrow_str, after_time=after_time, before_time=before_time
+    )
+
+    if date:
+        return {"next_available_date": date}
+    else:
+        return {"message": "Could not find any future available dates for this doctor."}
+
+
+async def _reschedule_booking(
+    db: HospitalDB,
+    booking_id: int,
+    patient_phone: str,
+    new_slot_id: int,
+) -> dict:
+    """Reschedule a booking to a new slot atomically."""
+    booking = await db.reschedule_booking(booking_id, patient_phone, new_slot_id)
+
+    if not booking:
+        return {
+            "status": "error",
+            "message": (
+                "Could not reschedule. The new slot might be taken, or the old "
+                "booking ID/phone is incorrect."
+            ),
+        }
+
+    return {
+        "status": "rescheduled",
+        "booking": booking,
+        "message": "Appointment rescheduled successfully!",
+    }
+
