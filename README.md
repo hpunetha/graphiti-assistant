@@ -107,27 +107,29 @@ Edit `.env` and set:
 
 You have a unified entry point `main.py` that handles both database seeding and running the interactive assistant.
 
-### Step 1: Generate Data & Seed the Database
-First, generate the synthetic hospital data CSVs, and then seed the Neo4j database and Graphiti Knowledge Graph. This creates doctors, ~27K slots, symptom mappings, and routing rules.
+### Step 1: Generate Data & Start Services
+First, generate the synthetic hospital data CSVs, and then start the Neo4j database and APIs using Docker Compose. The APIs must be running for the seeding process.
 
 ```bash
 # Generate CSVs (only needed once or if data schema changes)
 python -m scripts.generate_hospital_data
 
-# Seed Neo4j & Graphiti (clears existing data first)
-python main.py --seed-only
-```
-*Note: Seeding takes a few minutes as it makes several LLM calls to build the Graphiti Knowledge Graph.*
-
-### Step 2: Run the APIs
-To run the full stack (Neo4j, hospital-api, and medbook-api), use Docker Compose:
-```bash
+# Start Neo4j, hospital-api, and medbook-api
 docker compose --profile api up -d
 ```
-This starts:
-- **Neo4j** on `localhost:7474`
-- **hospital-api** on `localhost:8001` (Data endpoints)
-- **medbook-api** on `localhost:8000` (Agent endpoints)
+*(Neo4j Browser will be available at http://localhost:7474)*
+
+### Step 2: Seed the Database and Knowledge Graph
+With the services running, seed the Neo4j database with structural data (doctors, slots) and then build the Graphiti Knowledge Graph (which fetches data from the running `hospital-api`).
+
+```bash
+# 1. Seed Neo4j with structural hospital data (doctors, ~27K slots, bookings)
+python -m hospital_api.seed
+
+# 2. Seed Graphiti Knowledge Graph (symptom mappings, routing rules, semantic profiles)
+python main.py --seed-only
+```
+*Note: Seeding Graphiti takes a few minutes as it makes several LLM calls to build the semantic indices.*
 
 ### Step 3: Simulate Real-World Schedule Changes (Optional)
 In a separate terminal window, run the slot modifier script. This simulates real-world events by randomly blocking, walk-in booking, or reopening slots every few seconds.
