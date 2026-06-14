@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.assistant import SYSTEM_PROMPT, agent_loop
-from app.db import HospitalDB
+from app.api_client import HospitalApiClient
 from app.llm import LLM
 from app.logger import get_logger
 from app.memory import GraphMemory, quiet_graphiti_logs
@@ -35,7 +35,7 @@ quiet_graphiti_logs()
 log = get_logger(__name__)
 
 # Global instances initialized during lifespan
-db: HospitalDB = None  # type: ignore
+db: HospitalApiClient = None  # type: ignore
 memory: GraphMemory = None  # type: ignore
 llm: LLM = None  # type: ignore
 
@@ -50,14 +50,15 @@ async def lifespan(app: FastAPI):
     if not os.environ.get("OPENAI_API_KEY"):
         log.error("OPENAI_API_KEY not set!")
 
-    db = HospitalDB(uri, user, password)
+    hospital_api_url = os.environ.get("HOSPITAL_API_URL", "http://localhost:8001")
+    db = HospitalApiClient(hospital_api_url)
     memory = GraphMemory(uri, user, password)
     llm = LLM()
 
-    log.info("Starting up API, connecting to Neo4j...")
+    log.info("Starting up API, connecting to API and Neo4j...")
     await db.connect()
     await memory.setup()
-    log.info("Connected to Neo4j and Graphiti.")
+    log.info("Connected to Hospital API and Graphiti.")
 
     yield
 

@@ -14,36 +14,37 @@ It demonstrates a **dual-layer architecture**:
 graph TB
     subgraph "Patient Interface"
         CLI["CLI Chat<br/>(STT/TTS-ready)"]
-        API["FastAPI<br/>REST + WebSocket"]
+        API["MedBook API<br/>FastAPI REST + WS"]
     end
 
-    subgraph "Agentic Core"
+    subgraph "Agentic Core (medbook-api)"
         AGENT["Agent Loop<br/>assistant.py"]
         LLM_MOD["LLM<br/>llm.py"]
         TOOLS["Tool Registry<br/>tools.py"]
+        GRAPHITI["Graphiti KG<br/>memory.py"]
+        API_CLIENT["HospitalApiClient<br/>api_client.py"]
+        
         AGENT --> LLM_MOD
         AGENT --> TOOLS
+        TOOLS --> API_CLIENT
+        TOOLS --> GRAPHITI
+    end
+
+    subgraph "Hospital Core (hospital-api)"
+        HOSPITAL_API["FastAPI REST<br/>main.py"]
+        DB["HospitalDB<br/>db.py (Cypher)"]
+        HOSPITAL_API --> DB
     end
 
     subgraph "Data Layer"
-        DB["HospitalDB<br/>db.py<br/>(Cypher queries)"]
-        GRAPHITI["Graphiti KG<br/>memory.py<br/>(Semantic search)"]
-        NEO4J[(Neo4j)]
-    end
-
-    subgraph "Parallel Process"
-        MOD["slot_modifier.py"]
+        NEO4J[(Neo4j Container)]
     end
 
     CLI --> |text| AGENT
     API --> |text| AGENT
-    AGENT --> |response| CLI
-    AGENT --> |response| API
-    TOOLS --> DB
-    TOOLS --> GRAPHITI
-    DB --> NEO4J
-    GRAPHITI --> NEO4J
-    MOD --> |updates slots| NEO4J
+    API_CLIENT --> |HTTP| HOSPITAL_API
+    GRAPHITI --> |Bolt| NEO4J
+    DB --> |Bolt| NEO4J
 ```
 
 ### How the Agent Loop Works:
@@ -118,27 +119,15 @@ python main.py --seed-only
 ```
 *Note: Seeding takes a few minutes as it makes several LLM calls to build the Graphiti Knowledge Graph.*
 
-### Step 2: Run the Assistant
-You have two options for running the interactive assistant:
-
-**Option A: Command Line Interface (CLI)**
-Start the interactive CLI agent directly:
-```bash
-python main.py
-```
-You can chat naturally. Try describing symptoms, asking for specific doctors, checking slots, and booking or rescheduling appointments.
-
-**Option B: FastAPI + WebSocket Layer**
-If you want to run the assistant as a backend service, you can start the FastAPI layer using the `api` Docker profile:
+### Step 2: Run the APIs
+To run the full stack (Neo4j, hospital-api, and medbook-api), use Docker Compose:
 ```bash
 docker compose --profile api up -d
 ```
-This exposes:
-- **`GET /health`**: Liveness check
-- **`POST /chat`**: Stateless REST endpoint for chat
-- **`ws://localhost:8000/ws/chat`**: Stateful WebSocket endpoint for real-time chat sessions
-- **`GET /ws-test`**: Browser-based WebSocket chat tester UI (open in any browser — no tools needed)
-- **`GET /docs`**: Auto-generated Swagger UI for HTTP endpoints
+This starts:
+- **Neo4j** on `localhost:7474`
+- **hospital-api** on `localhost:8001` (Data endpoints)
+- **medbook-api** on `localhost:8000` (Agent endpoints)
 
 ### Step 3: Simulate Real-World Schedule Changes (Optional)
 In a separate terminal window, run the slot modifier script. This simulates real-world events by randomly blocking, walk-in booking, or reopening slots every few seconds.

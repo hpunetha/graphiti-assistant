@@ -1,7 +1,7 @@
 """
 tools.py — Tool definitions and implementations for the booking agent.
 
-Each tool maps to a HospitalDB method or a Graphiti search. The OpenAI
+Each tool maps to a HospitalApiClient method or a Graphiti search. The OpenAI
 function-calling schema is defined here, along with the dispatch function
 that executes tools by name.
 
@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.db import HospitalDB
+from app.api_client import HospitalApiClient
 from app.memory import GraphMemory
 
 # Time-of-day slot buckets (HH:MM strings, lexicographic comparison works for HH:MM)
@@ -183,7 +183,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "slot_id": {
                         "type": "integer",
-                        "description": "The slot ID to book (from get_available_slots)",
+                        "description": "The exact slot ID to book (from get_available_slots). CRITICAL: You must carefully match the user's chosen time to the correct slot_id.",
                     },
                     "patient_phone": {
                         "type": "string",
@@ -294,7 +294,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "new_slot_id": {
                         "type": "integer",
-                        "description": "The ID of the new slot to book",
+                        "description": "The exact ID of the new slot to book. CRITICAL: You must carefully match the user's chosen time to the correct slot_id from get_available_slots.",
                     },
                 },
                 "required": ["booking_id", "patient_phone", "new_slot_id"],
@@ -312,7 +312,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 async def execute_tool(
     name: str,
     arguments: dict[str, Any],
-    db: HospitalDB,
+    db: HospitalApiClient,
     memory: GraphMemory,
 ) -> str:
     """Execute a tool by name and return a JSON string result.
@@ -330,7 +330,7 @@ async def execute_tool(
 async def _dispatch(
     name: str,
     args: dict[str, Any],
-    db: HospitalDB,
+    db: HospitalApiClient,
     memory: GraphMemory,
 ) -> Any:
     """Internal dispatcher — calls the right DB/memory method."""
@@ -363,7 +363,7 @@ async def _dispatch(
 
 
 async def _identify_patient(
-    db: HospitalDB,
+    db: HospitalApiClient,
     phone: str,
     name: str | None = None,
     age: int | None = None,
@@ -390,7 +390,7 @@ async def _identify_patient(
 
 
 async def _search_doctors(
-    db: HospitalDB,
+    db: HospitalApiClient,
     speciality: str | None = None,
     name: str | None = None,
 ) -> dict:
@@ -428,7 +428,7 @@ async def _search_doctors(
 
 
 async def _suggest_speciality(
-    db: HospitalDB,
+    db: HospitalApiClient,
     memory: GraphMemory,
     symptoms: str,
     age: int | None = None,
@@ -464,7 +464,7 @@ async def _suggest_speciality(
 
 
 async def _get_available_slots(
-    db: HospitalDB,
+    db: HospitalApiClient,
     doctor_record_id: int,
     date: str,
     time_of_day: str | None = None,
@@ -524,7 +524,7 @@ async def _get_available_slots(
 
 
 async def _book_appointment(
-    db: HospitalDB,
+    db: HospitalApiClient,
     slot_id: int,
     patient_phone: str,
 ) -> dict:
@@ -557,7 +557,7 @@ async def _book_appointment(
     }
 
 
-async def _get_my_bookings(db: HospitalDB, patient_phone: str) -> dict:
+async def _get_my_bookings(db: HospitalApiClient, patient_phone: str) -> dict:
     """Get all bookings for a patient."""
     bookings = await db.get_patient_bookings(patient_phone)
 
@@ -580,7 +580,7 @@ async def _get_my_bookings(db: HospitalDB, patient_phone: str) -> dict:
 
 
 async def _cancel_booking(
-    db: HospitalDB,
+    db: HospitalApiClient,
     booking_id: int,
     patient_phone: str,
 ) -> dict:
@@ -603,7 +603,7 @@ async def _cancel_booking(
 
 
 async def _get_next_available_date(
-    db: HospitalDB,
+    db: HospitalApiClient,
     doctor_record_id: int,
     time_of_day: str | None = None,
     after_time: str | None = None,
@@ -645,7 +645,7 @@ async def _get_next_available_date(
 
 
 async def _reschedule_booking(
-    db: HospitalDB,
+    db: HospitalApiClient,
     booking_id: int,
     patient_phone: str,
     new_slot_id: int,
