@@ -89,9 +89,11 @@ docker compose up -d
 *(Neo4j Browser will be available at http://localhost:7474)*
 
 ### 2. Install Dependencies
+This project uses `uv` for fast dependency management.
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+*(Alternatively, you can use `pip install -r requirements.txt`)*
 
 ### 3. Configure Environment
 Copy the example config and add your OpenAI API key.
