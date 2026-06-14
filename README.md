@@ -137,6 +137,8 @@ This exposes:
 - **`GET /health`**: Liveness check
 - **`POST /chat`**: Stateless REST endpoint for chat
 - **`ws://localhost:8000/ws/chat`**: Stateful WebSocket endpoint for real-time chat sessions
+- **`GET /ws-test`**: Browser-based WebSocket chat tester UI (open in any browser — no tools needed)
+- **`GET /docs`**: Auto-generated Swagger UI for HTTP endpoints
 
 ### Step 3: Simulate Real-World Schedule Changes (Optional)
 In a separate terminal window, run the slot modifier script. This simulates real-world events by randomly blocking, walk-in booking, or reopening slots every few seconds.
