@@ -4,6 +4,7 @@ api.py — FastAPI endpoints for MedBook.
 Exposes the agentic booking loop over:
   1. POST /chat (stateless REST)
   2. WebSocket /ws/chat (stateful sessions)
+  3. GET /ws-test  (browser WebSocket test UI)
 
 Usage:
   uvicorn app.api:app --reload
@@ -19,6 +20,8 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.assistant import SYSTEM_PROMPT, agent_loop
@@ -69,6 +72,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Serve static assets (ws_test.html, etc.) from app/static/
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -102,6 +109,14 @@ class ChatRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "neo4j": "connected"}
+
+
+@app.get("/ws-test", response_class=HTMLResponse, include_in_schema=False)
+async def ws_test_ui():
+    """Browser-based WebSocket chat tester (not shown in OpenAPI docs)."""
+    html_path = os.path.join(os.path.dirname(__file__), "static", "ws_test.html")
+    with open(html_path, encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
 
 
 @app.post("/chat")
