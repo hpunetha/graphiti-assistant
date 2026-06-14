@@ -332,6 +332,7 @@ class HospitalDB:
             slot_start: s.slot_start,
             slot_end: s.slot_end,
             doctor_name: d.name,
+            doctor_record_id: d.doctor_record_id,
             speciality: d.speciality
         } AS booking
         ORDER BY s.appointment_date, s.slot_start

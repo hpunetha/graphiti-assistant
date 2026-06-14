@@ -135,8 +135,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": (
                 "Get available appointment slots for a specific doctor on a "
                 "specific date. Returns slot IDs, start/end times. Only shows "
-                "slots with status AVAILABLE. Optionally filter by time_of_day "
-                "(morning/afternoon/evening) or let the user specify an exact time."
+                "slots with status AVAILABLE. You can handle various time requests: "
+                "1) Time of day ('morning', 'afternoon', 'evening') using the time_of_day parameter. "
+                "2) Specific time ranges ('between 11am - 2pm') using after_time and before_time. "
+                "3) Open-ended times ('before 3pm', 'after 4pm') using before_time or after_time."
             ),
             "parameters": {
                 "type": "object",
@@ -152,13 +154,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "time_of_day": {
                         "type": "string",
                         "enum": ["morning", "afternoon", "evening"],
-                        "description": (
-                            "Optional time-of-day bucket: "
-                            "'morning' (before 12:00), "
-                            "'afternoon' (12:00-17:00), "
-                            "'evening' (17:00-19:00). "
-                            "Omit to return all available slots."
-                        ),
+                        "description": "Optional coarse time bucket. Use after_time/before_time for precise requests like 'before 3pm' or 'between 11am - 2pm'.",
+                    },
+                    "after_time": {
+                        "type": "string",
+                        "description": "Optional precise start time in HH:MM format (e.g., '16:30' for 4:30 PM). Use for 'after 4pm' or the start of a range.",
+                    },
+                    "before_time": {
+                        "type": "string",
+                        "description": "Optional precise end time in HH:MM format (e.g., '18:00' for 6:00 PM). Use for 'before 3pm' or the end of a range.",
                     },
                 },
                 "required": ["doctor_record_id", "date"],
@@ -240,7 +244,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "get_next_available_date",
             "description": (
                 "Find the nearest future date that has available slots for a doctor. "
-                "Use this when the requested date has no slots, instead of guessing dates one by one."
+                "Use this when the requested date has no slots, instead of guessing dates one by one. "
+                "Supports the same time filters as get_available_slots: time_of_day ('morning', 'afternoon', 'evening'), "
+                "or precise ranges using after_time and before_time (e.g. 'before 3pm', 'between 11am - 2pm')."
             ),
             "parameters": {
                 "type": "object",
@@ -252,7 +258,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "time_of_day": {
                         "type": "string",
                         "enum": ["morning", "afternoon", "evening"],
-                        "description": "Optional time-of-day bucket",
+                        "description": "Optional coarse time bucket. Use after_time/before_time for precise requests like 'before 3pm' or 'between 11am - 2pm'.",
+                    },
+                    "after_time": {
+                        "type": "string",
+                        "description": "Optional precise start time in HH:MM format (e.g., '16:30'). Use for 'after 4pm' or the start of a range.",
+                    },
+                    "before_time": {
+                        "type": "string",
+                        "description": "Optional precise end time in HH:MM format (e.g., '18:00'). Use for 'before 3pm' or the end of a range.",
                     },
                 },
                 "required": ["doctor_record_id"],
@@ -454,6 +468,8 @@ async def _get_available_slots(
     doctor_record_id: int,
     date: str,
     time_of_day: str | None = None,
+    after_time: str | None = None,
+    before_time: str | None = None,
 ) -> dict:
     """Get available slots for a doctor on a date, with optional time-of-day filtering.
 
@@ -467,10 +483,8 @@ async def _get_available_slots(
     current_time = now.strftime("%H:%M")
     is_today = (date == today_str)
 
-    # Resolve time-of-day bucket to (after_time, before_time)
-    after_time: str | None = None
-    before_time: str | None = None
-    if time_of_day and time_of_day in TIME_BUCKETS:
+    # Resolve time-of-day bucket if precise times are not provided
+    if not after_time and not before_time and time_of_day and time_of_day in TIME_BUCKETS:
         after_time, before_time = TIME_BUCKETS[time_of_day]
 
     # For today: ensure we never show already-passed slots
@@ -556,6 +570,7 @@ async def _get_my_bookings(db: HospitalDB, patient_phone: str) -> dict:
             "booking_id": b["booking_id"],
             "status": b["booking_status"],
             "doctor": b.get("doctor_name", ""),
+            "doctor_record_id": b.get("doctor_record_id", None),
             "speciality": b.get("speciality", ""),
             "date": b.get("appointment_date", ""),
             "time": f"{b.get('slot_start', '')} - {b.get('slot_end', '')}",
@@ -591,6 +606,8 @@ async def _get_next_available_date(
     db: HospitalDB,
     doctor_record_id: int,
     time_of_day: str | None = None,
+    after_time: str | None = None,
+    before_time: str | None = None,
 ) -> dict:
     """Find the nearest future date with available slots."""
     tz_name = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
@@ -599,9 +616,7 @@ async def _get_next_available_date(
     today_str = now.strftime("%Y-%m-%d")
     current_time = now.strftime("%H:%M")
 
-    after_time: str | None = None
-    before_time: str | None = None
-    if time_of_day and time_of_day in TIME_BUCKETS:
+    if not after_time and not before_time and time_of_day and time_of_day in TIME_BUCKETS:
         after_time, before_time = TIME_BUCKETS[time_of_day]
 
     # For today check: push after_time if needed

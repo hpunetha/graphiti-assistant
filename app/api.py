@@ -101,9 +101,17 @@ def _get_initial_messages() -> list[dict[str, Any]]:
     ]
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str | None = None
+    name: str | None = None
+    tool_call_id: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+
+
 class ChatRequest(BaseModel):
     user_message: str
-    messages: list[dict[str, Any]] | None = None
+    messages: list[ChatMessage] | None = None
 
 
 @app.get("/health")
@@ -122,7 +130,11 @@ async def ws_test_ui():
 @app.post("/chat")
 async def chat(req: ChatRequest):
     """Stateless REST endpoint. Send previous messages if you want context."""
-    messages = req.messages if req.messages else _get_initial_messages()
+    messages = (
+        [m.model_dump(exclude_none=True) for m in req.messages]
+        if req.messages
+        else _get_initial_messages()
+    )
     
     try:
         reply = await agent_loop(llm, db, memory, messages, req.user_message)

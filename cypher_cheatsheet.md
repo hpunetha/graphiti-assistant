@@ -44,12 +44,12 @@ ORDER BY doctor_count DESC
 ```
 
 ### Slots & Availability
-**Check existing available slots for a specific doctor**
+**Check existing available slots for a specific doctor from specific date onwards**
 ```cypher
 MATCH (d:Doctor)-[:HAS_SLOT]->(s:Slot)
-WHERE d.name CONTAINS 'Arvind' AND s.slot_status = 'AVAILABLE'
+WHERE d.name CONTAINS 'Amit' AND s.slot_status = 'AVAILABLE' AND s.appointment_date >= '2026-06-15'
 RETURN d.name, s.appointment_date, s.slot_start, s.slot_end
-ORDER BY s.appointment_date, s.slot_start LIMIT 10
+ORDER BY s.appointment_date, s.slot_start LIMIT 100   
 ```
 
 **Count available vs booked slots across the hospital**
@@ -229,5 +229,34 @@ MATCH (d:Doctor)-[:HAS_SLOT]->(s:Slot)
 WHERE s.slot_start >= '17:00'
 RETURN d.name, count(s) AS evening_slots
 ORDER BY d.name
+```
+
+---
+
+## 6. Testing / Simulating Unavailability
+
+Use these queries to manually mark slots as `NOT_AVAILABLE` to test the agent's fallback behavior when asking for specific times that are fully booked.
+
+**Mark all slots for a specific doctor on a date as NOT_AVAILABLE**
+```cypher
+MATCH (d:Doctor {name: 'Dr. Amit Sharma'})-[:HAS_SLOT]->(s:Slot {appointment_date: '2026-06-15'})
+SET s.slot_status = 'NOT_AVAILABLE'
+RETURN count(s) AS marked_unavailable
+```
+
+**Mark afternoon/evening slots for a specific doctor as NOT_AVAILABLE**
+```cypher
+MATCH (d:Doctor {name: 'Dr. Amit Sharma'})-[:HAS_SLOT]->(s:Slot {appointment_date: '2026-06-15'})
+WHERE s.slot_start >= '16:00'
+SET s.slot_status = 'NOT_AVAILABLE'
+RETURN count(s) AS marked_unavailable
+```
+
+**Revert NOT_AVAILABLE slots back to AVAILABLE**
+```cypher
+MATCH (d:Doctor {name: 'Dr. Amit Sharma'})-[:HAS_SLOT]->(s:Slot {appointment_date: '2026-06-15'})
+WHERE s.slot_status = 'NOT_AVAILABLE'
+SET s.slot_status = 'AVAILABLE'
+RETURN count(s) AS restored
 ```
 
