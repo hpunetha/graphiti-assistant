@@ -209,4 +209,25 @@ bot> There are no evening slots on June 14. The next available date for evenings
 | `GET` | `/health` | Liveness probe |
 | `POST` | `/chat` | Stateless REST — pass `messages` for context |
 | `WebSocket` | `/ws/chat` | Stateful — server holds context per connection |
-| `GET` | `/docs` | Auto Swagger UI |
+| `GET` | `/docs` | Auto Swagger UI (HTTP endpoints only) |
+| `GET` | `/ws-test` | Browser-based WebSocket chat tester UI |
+
+---
+
+## 7. WebSocket Test UI (`/ws-test`)
+
+Since Swagger UI does not support WebSocket endpoints, a built-in browser chat UI is available at:
+
+```
+http://localhost:8000/ws-test
+```
+
+This page lets you interact with the `/ws/chat` endpoint directly from the browser without any external tools.
+
+### Features
+- 🔌 **Connect / Disconnect** button with live status indicator and session ID display
+- 💬 **Chat bubbles** — distinct styling for bot replies, user messages, system events, and errors
+- ⏳ **Typing indicator** — animated dots while the agent is processing
+- ⚡ **Quick message sidebar** — one-click buttons for each booking flow step (symptom, phone, name, age, gender, date)
+- 🔄 **Reset** button — clears server-side session context
+- ⌨️ `Enter` to send, `Shift+Enter` for a newline
