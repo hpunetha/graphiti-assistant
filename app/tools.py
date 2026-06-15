@@ -21,6 +21,7 @@ Tools:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime, timedelta
@@ -397,7 +398,7 @@ async def _dispatch(
     elif name == "get_available_slots":
         return await _get_available_slots(db, **args)
     elif name == "book_appointment":
-        return await _book_appointment(db, **args)
+        return await _book_appointment(db, memory, **args)
     elif name == "get_my_bookings":
         return await _get_my_bookings(db, **args)
     elif name == "cancel_booking":
@@ -582,6 +583,7 @@ async def _get_available_slots(
 
 async def _book_appointment(
     db: HospitalApiClient,
+    memory: GraphMemory,
     slot_id: int,
     patient_phone: str,
 ) -> dict:
@@ -606,6 +608,22 @@ async def _book_appointment(
                 "Please check available slots again for updated availability."
             ),
         }
+
+    # Fire-and-forget: record the doctor visit in Graphiti so future recalls can
+    # answer "which doctor did I see for X?" The task runs in the background and
+    # does not block the booking confirmation returned to the LLM.
+    doctor_name = booking.get("doctor_name", "Unknown")
+    speciality = booking.get("speciality", "")
+    appt_date = booking.get("appointment_date", "")
+    fact = f"Patient booked an appointment with Dr. {doctor_name} ({speciality}) on {appt_date}"
+
+    async def _remember_safely() -> None:
+        try:
+            await memory.remember(text=fact, user_id=patient_phone, source_desc="booking")
+        except Exception:
+            pass  # never let background memory writes break the booking flow
+
+    asyncio.create_task(_remember_safely())
 
     return {
         "status": "confirmed",
