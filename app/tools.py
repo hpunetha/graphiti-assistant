@@ -15,6 +15,8 @@ Tools:
     get_my_bookings          — List a patient's existing bookings
     reschedule_booking       — Atomically move a booking to a new slot
     cancel_booking           — Cancel an existing booking
+    record_patient_fact      — Record an allergy, symptom, or preference
+    recall_patient_history   — Retrieve patient's history/preferences
 """
 
 from __future__ import annotations
@@ -301,6 +303,57 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_patient_fact",
+            "description": (
+                "Save important, long-term patient information into their history (e.g., "
+                "allergies, evolving symptoms, chronic conditions, time preferences, or doctor preferences). "
+                "Do NOT save transactional data like appointment dates or slots."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "The patient's phone number",
+                    },
+                    "fact": {
+                        "type": "string",
+                        "description": "The semantic fact to remember (e.g., 'Patient prefers evening slots', 'Allergic to penicillin')",
+                    },
+                },
+                "required": ["phone", "fact"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_patient_history",
+            "description": (
+                "Retrieve a patient's historical profile, including past symptoms, "
+                "allergies, relationships (e.g. 'caller is father'), and preferences. "
+                "Use this to answer questions like 'what can you tell me about my son' "
+                "by querying for 'son', 'father', or the patient's name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "The patient's phone number",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "What specifically to look for (e.g., 'allergies', 'time preferences', 'son', or 'general health history')",
+                    },
+                },
+                "required": ["phone", "query"],
+            },
+        },
+    },
 ]
 
 
@@ -353,6 +406,10 @@ async def _dispatch(
         return await _get_next_available_date(db, **args)
     elif name == "reschedule_booking":
         return await _reschedule_booking(db, **args)
+    elif name == "record_patient_fact":
+        return await _record_patient_fact(memory, **args)
+    elif name == "recall_patient_history":
+        return await _recall_patient_history(memory, **args)
     else:
         return {"error": f"Unknown tool: {name}"}
 
@@ -668,3 +725,16 @@ async def _reschedule_booking(
         "message": "Appointment rescheduled successfully!",
     }
 
+
+async def _record_patient_fact(memory: GraphMemory, phone: str, fact: str) -> dict:
+    """Record a semantic fact about the patient in Graphiti."""
+    await memory.remember(text=fact, user_id=phone, source_desc="patient_fact")
+    return {"status": "saved", "message": f"Recorded patient fact: {fact}"}
+
+
+async def _recall_patient_history(memory: GraphMemory, phone: str, query: str) -> dict:
+    """Retrieve patient history from Graphiti."""
+    facts = await memory.recall(query=query, user_id=phone, limit=5)
+    if not facts:
+        return {"message": "No relevant history found."}
+    return {"history": facts}
