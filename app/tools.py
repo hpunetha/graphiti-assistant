@@ -315,7 +315,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "patient_phone": {
+                    "phone": {
                         "type": "string",
                         "description": "The patient's phone number",
                     },
@@ -324,7 +324,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "The semantic fact to remember (e.g., 'Patient prefers evening slots', 'Allergic to penicillin')",
                     },
                 },
-                "required": ["patient_phone", "fact"],
+                "required": ["phone", "fact"],
             },
         },
     },
@@ -341,7 +341,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "patient_phone": {
+                    "phone": {
                         "type": "string",
                         "description": "The patient's phone number",
                     },
@@ -350,7 +350,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "description": "What specifically to look for (e.g., 'allergies', 'time preferences', 'son', or 'general health history')",
                     },
                 },
-                "required": ["patient_phone", "query"],
+                "required": ["phone", "query"],
             },
         },
     },
@@ -726,15 +726,15 @@ async def _reschedule_booking(
     }
 
 
-async def _record_patient_fact(memory: GraphMemory, patient_phone: str, fact: str) -> dict:
+async def _record_patient_fact(memory: GraphMemory, phone: str, fact: str) -> dict:
     """Record a semantic fact about the patient in Graphiti."""
-    await memory.remember(text=fact, user_id=patient_phone, source_desc="patient_fact")
+    await memory.remember(text=fact, user_id=phone, source_desc="patient_fact")
     return {"status": "saved", "message": f"Recorded patient fact: {fact}"}
 
 
-async def _recall_patient_history(memory: GraphMemory, patient_phone: str, query: str) -> dict:
+async def _recall_patient_history(memory: GraphMemory, phone: str, query: str) -> dict:
     """Retrieve patient history from Graphiti."""
-    facts = await memory.recall(query=query, user_id=patient_phone, limit=5)
+    facts = await memory.recall(query=query, user_id=phone, limit=5)
     if not facts:
         return {"message": "No relevant history found."}
     return {"history": facts}

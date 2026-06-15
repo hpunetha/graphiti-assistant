@@ -20,6 +20,15 @@ from datetime import datetime, timezone
 
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
+from graphiti_core.search.search_config import (
+    EdgeReranker,
+    EdgeSearchConfig,
+    EdgeSearchMethod,
+    NodeReranker,
+    NodeSearchConfig,
+    NodeSearchMethod,
+    SearchConfig,
+)
 
 
 def quiet_graphiti_logs() -> None:
@@ -35,6 +44,24 @@ def quiet_graphiti_logs() -> None:
     """
     logging.getLogger("graphiti_core").setLevel(logging.CRITICAL)
     logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
+
+
+# Custom search config with no minimum score — default 0.6 threshold silently
+# drops low-similarity facts. We search both edges AND nodes because Graphiti
+# stores entity summaries (e.g. "prefers evening slots") on EntityNode.summary,
+# not just on edges.
+_PATIENT_SEARCH_CONFIG = SearchConfig(
+    edge_config=EdgeSearchConfig(
+        search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
+        reranker=EdgeReranker.rrf,
+        sim_min_score=0.0,
+    ),
+    node_config=NodeSearchConfig(
+        search_methods=[NodeSearchMethod.bm25, NodeSearchMethod.cosine_similarity],
+        reranker=NodeReranker.rrf,
+        sim_min_score=0.0,
+    ),
+)
 
 
 class GraphMemory:
@@ -76,13 +103,19 @@ class GraphMemory:
         This combines vector (semantic) similarity, BM25 (keyword) matching,
         and graph traversal — and it does NOT call an LLM at query time, so it
         is fast.
+
+        We use sim_min_score=0.0 (vs the default 0.6) so that preference and
+        relationship facts aren't silently dropped by the cosine threshold.
         """
-        results = await self.client.search(
+        _PATIENT_SEARCH_CONFIG.limit = limit
+        results = await self.client.search_(
             query=query,
+            config=_PATIENT_SEARCH_CONFIG,
             group_ids=[user_id],
-            num_results=limit,
         )
-        return [r.fact for r in results]
+        edge_facts = [r.fact for r in results.edges]
+        node_summaries = [n.summary for n in results.nodes if n.summary]
+        return (edge_facts + node_summaries)[:limit]
 
     async def close(self) -> None:
         await self.client.close()

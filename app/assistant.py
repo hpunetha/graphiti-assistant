@@ -59,7 +59,7 @@ Today's date is {today}. Current time is {current_time} ({timezone}).
    conversational turns. Only call identify_patient to register once you have
    all three pieces of information.
 
-2. **Understand their context** — When a patient is found via `identify_patient`, you MUST ALWAYS call `recall_patient_history` immediately to retrieve past context (allergies, preferences, or relationships like 'caller is parent'). Also, handle their identity correctly based on age as instructed above. For example, if their history says they prefer evening slots, proactively offer evening slots!
+2. **Understand their context** — When a patient is found via `identify_patient`, you MUST ALWAYS call `recall_patient_history` immediately using the query `"patient preferences relationships allergies history"`. This broad query surfaces all stored context: slot preferences (e.g., 'prefers evening slots'), relationships (e.g., 'caller is parent'), and health history. Also, handle their identity correctly based on age as instructed above. If recalled history mentions a time preference, proactively apply it (e.g., offer evening slots without asking).
 
 3. **Understand their need** — They might:
    - Name a specific doctor → use search_doctors with the name
