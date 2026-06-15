@@ -6,15 +6,16 @@ function-calling schema is defined here, along with the dispatch function
 that executes tools by name.
 
 Tools:
-    identify_patient         — Look up or register a patient by phone
+    identify_patient         — Look up or register a patient by phone (returns family members too)
     search_doctors           — Find doctors by speciality or name
     suggest_speciality       — Given symptoms/age/gender, suggest speciality
     get_available_slots      — List available slots for a doctor on a date
     get_next_available_date  — Find nearest future date with open slots
-    book_appointment         — Book a specific slot for a patient
+    book_appointment         — Book a specific slot for a patient or family member
     get_my_bookings          — List a patient's existing bookings
     reschedule_booking       — Atomically move a booking to a new slot
     cancel_booking           — Cancel an existing booking
+    register_family_member   — Add a family member under an existing account
     record_patient_fact      — Record an allergy, symptom, or preference
     recall_patient_history   — Retrieve patient's history/preferences
 """
@@ -49,9 +50,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "identify_patient",
             "description": (
                 "Look up a patient by phone number. If the patient exists, "
-                "returns their profile. If not found, ask for name, age, and gender "
-                "ONE AT A TIME across separate turns if needed — do NOT demand all three "
-                "at once. Call this tool again once you have all three to register them."
+                "returns their profile AND a list of registered family members. "
+                "If not found, ask for name, age, and gender ONE AT A TIME across "
+                "separate turns — do NOT demand all three at once. Call this tool "
+                "again once you have all three to register them."
             ),
             "parameters": {
                 "type": "object",
@@ -177,9 +179,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "book_appointment",
             "description": (
-                "Book a specific slot for a patient. The slot must be AVAILABLE. "
-                "If the slot was taken or blocked since the patient last checked, "
-                "returns a failure message. The patient must be identified first."
+                "Book a specific slot for a patient or one of their family members. "
+                "The slot must be AVAILABLE. If the slot was taken or blocked since "
+                "the patient last checked, returns a failure message. The patient must "
+                "be identified first. If booking for a family member, pass their exact "
+                "name in for_member."
             ),
             "parameters": {
                 "type": "object",
@@ -190,7 +194,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "patient_phone": {
                         "type": "string",
-                        "description": "The patient's phone number (must be registered)",
+                        "description": "The account holder's phone number (must be registered)",
+                    },
+                    "for_member": {
+                        "type": "string",
+                        "description": "Name of the family member this appointment is for. Omit if booking for the account holder themselves.",
                     },
                 },
                 "required": ["slot_id", "patient_phone"],
@@ -307,6 +315,46 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "register_family_member",
+            "description": (
+                "Register a family member under an existing patient's phone account. "
+                "Use this when the caller wants to book for someone who is not yet in "
+                "the family member list returned by identify_patient. "
+                "Ask for name, age, gender, and their relationship to the account holder "
+                "(e.g. 'son', 'wife', 'father') ONE AT A TIME if needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "The account holder's phone number",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Family member's full name",
+                    },
+                    "age": {
+                        "type": "integer",
+                        "description": "Family member's age in years",
+                    },
+                    "gender": {
+                        "type": "string",
+                        "enum": ["Male", "Female", "Other"],
+                        "description": "Family member's gender",
+                    },
+                    "relationship": {
+                        "type": "string",
+                        "description": "Relationship to account holder (e.g. 'son', 'wife', 'father', 'daughter')",
+                    },
+                },
+                "required": ["phone", "name", "age", "gender", "relationship"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "record_patient_fact",
             "description": (
                 "Save important, long-term patient information into their history (e.g., "
@@ -407,6 +455,8 @@ async def _dispatch(
         return await _get_next_available_date(db, **args)
     elif name == "reschedule_booking":
         return await _reschedule_booking(db, **args)
+    elif name == "register_family_member":
+        return await _register_family_member(db, **args)
     elif name == "record_patient_fact":
         return await _record_patient_fact(memory, **args)
     elif name == "recall_patient_history":
@@ -427,10 +477,11 @@ async def _identify_patient(
     age: int | None = None,
     gender: str | None = None,
 ) -> dict:
-    """Look up or register a patient."""
+    """Look up or register a patient, returning family members too."""
     patient = await db.get_patient(phone)
     if patient:
-        return {"status": "found", "patient": patient}
+        members = await db.get_family_members(phone)
+        return {"status": "found", "patient": patient, "family_members": members}
 
     # New patient — need name, age, gender to register
     if not all([name, age, gender]):
@@ -444,7 +495,7 @@ async def _identify_patient(
         }
 
     patient = await db.register_patient(phone, name, age, gender)
-    return {"status": "registered", "patient": patient}
+    return {"status": "registered", "patient": patient, "family_members": []}
 
 
 async def _search_doctors(
@@ -586,6 +637,7 @@ async def _book_appointment(
     memory: GraphMemory,
     slot_id: int,
     patient_phone: str,
+    for_member: str | None = None,
 ) -> dict:
     """Atomically book a slot."""
     # Verify patient exists
@@ -597,7 +649,7 @@ async def _book_appointment(
         }
 
     # Attempt atomic booking
-    booking = await db.book_slot(slot_id, patient_phone, patient["name"])
+    booking = await db.book_slot(slot_id, patient_phone, member_name=for_member)
 
     if not booking:
         return {
@@ -615,7 +667,8 @@ async def _book_appointment(
     doctor_name = booking.get("doctor_name", "Unknown")
     speciality = booking.get("speciality", "")
     appt_date = booking.get("appointment_date", "")
-    fact = f"Patient booked an appointment with Dr. {doctor_name} ({speciality}) on {appt_date}"
+    booked_for = for_member or patient["name"]
+    fact = f"{booked_for} booked an appointment with Dr. {doctor_name} ({speciality}) on {appt_date}"
 
     async def _remember_safely() -> None:
         try:
@@ -741,6 +794,23 @@ async def _reschedule_booking(
         "status": "rescheduled",
         "booking": booking,
         "message": "Appointment rescheduled successfully!",
+    }
+
+
+async def _register_family_member(
+    db: HospitalApiClient,
+    phone: str,
+    name: str,
+    age: int,
+    gender: str,
+    relationship: str,
+) -> dict:
+    """Register a family member under an existing patient account."""
+    member = await db.register_family_member(phone, name, age, gender, relationship)
+    return {
+        "status": "registered",
+        "member": member,
+        "message": f"{name} has been added as a family member to this account.",
     }
 
 

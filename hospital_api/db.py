@@ -168,7 +168,9 @@ class HospitalDB:
     # Booking operations (atomic)
     # ------------------------------------------------------------------
 
-    async def _do_book_slot(self, tx, slot_id: int, patient_phone: str) -> dict | None:
+    async def _do_book_slot(
+        self, tx, slot_id: int, patient_phone: str, member_name: str | None = None
+    ) -> dict | None:
         """Inner transaction function for atomic slot booking.
 
         Both steps run in the same write transaction — get the max booking_id
@@ -182,7 +184,9 @@ class HospitalDB:
         max_record = await max_result.single()
         new_id = (max_record["max_id"] if max_record else 50000) + 1
 
-        # Step 2: check-and-book atomically (WHERE guards against race condition)
+        # Step 2: check-and-book atomically (WHERE guards against race condition).
+        # patient_name is stored on the Booking node so it reflects who the
+        # appointment is actually for (account holder or a family member).
         book_result = await tx.run(
             """
             MATCH (s:Slot {slot_id: $slot_id})
@@ -193,7 +197,8 @@ class HospitalDB:
             CREATE (b:Booking {
                 booking_id: $new_id,
                 booking_status: 'CONFIRMED',
-                booked_at: datetime()
+                booked_at: datetime(),
+                patient_name: coalesce($member_name, p.name)
             })
             CREATE (p)-[:MADE_BOOKING]->(b)
             CREATE (b)-[:BOOKED_IN]->(s)
@@ -206,13 +211,13 @@ class HospitalDB:
                 slot_end: s.slot_end,
                 doctor_name: d.name,
                 speciality: d.speciality,
-                patient_name: p.name,
                 patient_phone: p.phone
             } AS booking
             """,
             slot_id=slot_id,
             patient_phone=patient_phone,
             new_id=new_id,
+            member_name=member_name,
         )
         record = await book_result.single()
         return record["booking"] if record else None
@@ -221,7 +226,7 @@ class HospitalDB:
         self,
         slot_id: int,
         patient_phone: str,
-        patient_name: str,
+        member_name: str | None = None,
     ) -> dict | None:
         """Atomically book a slot. Returns booking details or None if the slot
         is no longer available (race condition handled).
@@ -232,7 +237,7 @@ class HospitalDB:
         """
         async with self._driver.session() as session:
             return await session.execute_write(
-                self._do_book_slot, slot_id, patient_phone
+                self._do_book_slot, slot_id, patient_phone, member_name
             )
 
     async def cancel_booking(
@@ -271,22 +276,23 @@ class HospitalDB:
         MATCH (new_s:Slot {slot_id: $new_slot_id})
         WHERE old_b.booking_status = 'CONFIRMED'
           AND new_s.slot_status = 'AVAILABLE'
-        
+
         // Cancel old
         SET old_b.booking_status = 'CANCELLED',
             old_s.slot_status = 'AVAILABLE'
-        
-        // Book new
+
+        // Book new — carry patient_name forward so family member info is preserved
         SET new_s.slot_status = 'BOOKED'
         CREATE (new_b:Booking {
             booking_id: $new_id,
             booking_status: 'CONFIRMED',
-            booked_at: datetime()
+            booked_at: datetime(),
+            patient_name: coalesce(old_b.patient_name, p.name)
         })
         CREATE (p)-[:MADE_BOOKING]->(new_b)
         CREATE (new_b)-[:BOOKED_IN]->(new_s)
         CREATE (new_b)-[:WITH_DOCTOR]->(d)
-        
+
         RETURN new_b {
             .*,
             slot_id: new_s.slot_id,
@@ -295,7 +301,6 @@ class HospitalDB:
             slot_end: new_s.slot_end,
             doctor_name: d.name,
             speciality: d.speciality,
-            patient_name: p.name,
             patient_phone: p.phone
         } AS booking
         """
@@ -327,6 +332,7 @@ class HospitalDB:
         MATCH (b)-[:WITH_DOCTOR]->(d:Doctor)
         RETURN b {
             .*,
+            patient_name: coalesce(b.patient_name, p.name),
             slot_id: s.slot_id,
             appointment_date: s.appointment_date,
             slot_start: s.slot_start,
@@ -377,6 +383,48 @@ class HospitalDB:
             )
             record = await result.single()
             return record["patient"]
+
+    async def get_family_members(self, phone: str) -> list[dict]:
+        """Return all family members registered under this phone number."""
+        query = """
+        MATCH (p:Patient {phone: $phone})-[:HAS_MEMBER]->(fm:FamilyMember)
+        RETURN fm {.*} AS member
+        ORDER BY fm.name
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, phone=phone)
+            records = await result.data()
+            return [r["member"] for r in records]
+
+    async def register_family_member(
+        self, phone: str, name: str, age: int, gender: str, relationship: str
+    ) -> dict:
+        """Add a family member under an existing patient account.
+
+        Uses MERGE on (phone, name) so re-registering the same person just
+        updates their details without creating a duplicate node.
+        """
+        query = """
+        MATCH (p:Patient {phone: $phone})
+        MERGE (p)-[:HAS_MEMBER]->(fm:FamilyMember {phone: $phone, name: $name})
+        ON CREATE SET fm.age = $age, fm.gender = $gender,
+                      fm.relationship = $relationship,
+                      fm.registered_at = datetime()
+        ON MATCH SET  fm.age = $age, fm.gender = $gender,
+                      fm.relationship = $relationship
+        RETURN fm {.*} AS member
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                query,
+                phone=phone,
+                name=name,
+                age=age,
+                gender=gender,
+                relationship=relationship,
+            )
+            record = await result.single()
+            return record["member"]
 
     # ------------------------------------------------------------------
     # Admin / modifier operations

@@ -28,9 +28,16 @@ class PatientData(BaseModel):
     age: int
     gender: str
 
+class FamilyMemberData(BaseModel):
+    name: str
+    age: int
+    gender: str
+    relationship: str
+
 class BookingRequest(BaseModel):
     slot_id: int
     patient_phone: str
+    member_name: str | None = None
 
 class RescheduleRequest(BaseModel):
     booking_id: int
@@ -96,6 +103,21 @@ async def register_patient(data: PatientData):
     patient = await db.register_patient(data.phone, data.name, data.age, data.gender)
     return patient
 
+@app.get("/patients/{phone}/members")
+async def get_family_members(phone: str):
+    members = await db.get_family_members(phone)
+    return members
+
+@app.post("/patients/{phone}/members")
+async def register_family_member(phone: str, data: FamilyMemberData):
+    patient = await db.get_patient(phone)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    member = await db.register_family_member(
+        phone, data.name, data.age, data.gender, data.relationship
+    )
+    return member
+
 @app.get("/bookings")
 async def get_bookings(phone: str):
     bookings = await db.get_patient_bookings(phone)
@@ -106,8 +128,8 @@ async def book_appointment(req: BookingRequest):
     patient = await db.get_patient(req.patient_phone)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
-    
-    booking = await db.book_slot(req.slot_id, req.patient_phone, patient["name"])
+
+    booking = await db.book_slot(req.slot_id, req.patient_phone, member_name=req.member_name)
     if not booking:
         raise HTTPException(status_code=409, detail="Slot no longer available")
     return booking

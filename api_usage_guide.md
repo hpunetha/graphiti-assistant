@@ -226,7 +226,41 @@ This page lets you interact with the `/ws/chat` endpoint directly from the brows
 
 ---
 
-## 8. Hospital API (Data endpoints)
+## 8. Family Member Booking (via WebSocket)
+
+When a phone account has multiple people (e.g. Ramesh books for himself and his son Neeraj), the agent asks who the appointment is for. If the person isn't registered yet, it adds them first.
+
+```
+> 9876500001
+< "I found the profile for Neeraj (age 12). Registered family members: Ramesh (father).
+   Who is this appointment for — Neeraj or Ramesh?"
+
+> Ramesh
+< "Got it, booking for Ramesh. What are your symptoms or which doctor would you like?"
+
+> Cardiology
+< [shows cardiologists, proceeds to slot selection]
+
+> book the 10:00 slot
+< "✅ Confirmed! Booking #50031
+   • Patient: Ramesh
+   • Doctor: Dr. Priya Nair (Cardiology)
+   • Date: 2026-06-17 · 10:00–10:10"
+```
+
+To add a new family member mid-conversation:
+```
+> I want to book for my wife Priya
+< "I'll add Priya to your account. How old is she?"
+> 38
+< "And her gender?"
+> Female
+< [registers Priya as a family member, then proceeds with booking with for_member="Priya"]
+```
+
+---
+
+## 9. Hospital API (Data endpoints)
 The raw hospital operations run on port `8001` (if using Docker Compose).
 These endpoints manage the structured Neo4j database natively:
 
@@ -234,5 +268,7 @@ These endpoints manage the structured Neo4j database natively:
 |--------|-----|-------------|
 | `GET` | `http://localhost:8001/doctors` | List specialities or search doctors (`?speciality=` or `?name=`) |
 | `GET` | `http://localhost:8001/slots` | Get available slots for a doctor |
-| `POST` | `http://localhost:8001/bookings` | Book a slot |
+| `POST` | `http://localhost:8001/bookings` | Book a slot (`slot_id`, `patient_phone`, optional `member_name`) |
 | `POST` | `http://localhost:8001/patients` | Register a new patient |
+| `GET` | `http://localhost:8001/patients/{phone}/members` | List family members for a phone account |
+| `POST` | `http://localhost:8001/patients/{phone}/members` | Add a family member (`name`, `age`, `gender`, `relationship`) |

@@ -58,19 +58,20 @@ graph TB
 
 ## 🛠️ Agent Tools
 
-The LLM has access to 11 specialized tools via OpenAI function calling:
+The LLM has access to 12 specialized tools via OpenAI function calling:
 
 | Tool | What it does | Key Detail |
 |---|---|---|
-| `identify_patient` | Look up or register a patient by phone | MERGE-based (idempotent) |
+| `identify_patient` | Look up or register a patient by phone | Returns primary patient + all family members |
 | `search_doctors` | Find doctors by speciality or name | Case-insensitive partial match |
 | `suggest_speciality` | Symptom → speciality recommendation | Semantic search via Graphiti + LLM reasoning |
 | `get_available_slots`| Available slots for a doctor + date | Real-time query (reflects live modifier changes) |
 | `get_next_available_date`| Finds next date with open slots | Single Cypher query, avoids LLM guessing dates |
-| `book_appointment` | Atomically book a slot | Single Cypher write transaction preventing double-booking |
-| `get_my_bookings` | List patient's bookings | Shows confirmed + cancelled appointments |
-| `reschedule_booking` | Move booking to a new slot | Atomic cancellation and rebooking in one transaction |
+| `book_appointment` | Atomically book a slot for patient or family member | Accepts optional `for_member` name; stores on Booking node |
+| `get_my_bookings` | List patient's bookings | Shows confirmed + cancelled appointments with correct patient name |
+| `reschedule_booking` | Move booking to a new slot | Atomic cancellation and rebooking; preserves family member name |
 | `cancel_booking` | Cancel a booking, free the slot | Verifies phone ownership before cancelling |
+| `register_family_member` | Add a family member under an existing account | MERGE-based (idempotent); linked via `HAS_MEMBER` relationship |
 | `record_patient_fact`| Saves long-term patient facts (allergies, preferences, relationships) | Uses Graphiti temporal memory |
 | `recall_patient_history` | Retrieves a patient's historical profile | Uses Graphiti semantic recall |
 
@@ -78,9 +79,17 @@ The LLM has access to 11 specialized tools via OpenAI function calling:
 
 ## 🧠 Dynamic Patient Memory
 
-MedBook uses **Graphiti** to track evolving patient health, preferences, and relationships over time. Unlike transactional data (which uses Neo4j directly), semantic facts like "I am allergic to penicillin", "I prefer evening appointments", or "I am booking for my child" are saved into the patient's individual namespace in Graphiti via explicitly controlled agent tools (`record_patient_fact`). 
+MedBook uses **Graphiti** to track evolving patient health, preferences, and relationships over time. Unlike transactional data (which uses Neo4j directly), semantic facts like "I am allergic to penicillin", "I prefer evening appointments", or "I am booking for my child" are saved into the patient's individual namespace in Graphiti via explicitly controlled agent tools (`record_patient_fact`).
 
-When a patient connects, the agent can use `recall_patient_history` to understand their context and proactively cater to their preferences.
+When a booking is confirmed, a background task automatically records `"[Name] booked an appointment with Dr. X (Speciality) on [date]"` in Graphiti, enabling future cross-session recall like "which doctor did I see for my headaches?"
+
+When a patient connects, the agent calls `recall_patient_history` to understand their context and proactively cater to their preferences.
+
+## 👨‍👩‍👧 Family Member Support
+
+A single phone number can be linked to multiple people — the account holder and any number of family members. When `identify_patient` returns a non-empty `family_members` list (or the primary patient is a child), the agent asks *"Who is this appointment for?"* before proceeding.
+
+Family members are stored as `FamilyMember` nodes in Neo4j, linked to the primary `Patient` via a `HAS_MEMBER` relationship. Bookings record the actual patient name on the `Booking` node regardless of who owns the phone account, so `get_my_bookings` always shows the correct name per appointment.
 
 ---
 
@@ -223,16 +232,25 @@ erDiagram
         int age
         string gender
     }
+    FamilyMember {
+        string phone FK
+        string name
+        int age
+        string gender
+        string relationship "son | wife | father | etc."
+    }
     Booking {
         int booking_id PK
         string booking_status "CONFIRMED | CANCELLED"
         datetime booked_at
+        string patient_name "account holder or family member"
     }
 
     Doctor ||--o{ Slot : "HAS_SLOT"
     Slot ||--o| Booking : "BOOKED_IN"
     Patient ||--o{ Booking : "MADE_BOOKING"
     Booking }o--|| Doctor : "WITH_DOCTOR"
+    Patient ||--o{ FamilyMember : "HAS_MEMBER"
 ```
 
 *Note: The system generates ~27,000 slots representing 10-minute intervals over a 2-month period for the 11 doctors.*
@@ -303,7 +321,7 @@ This means you can easily swap the CLI `input()` and `print()` statements with S
 │   ├── llm.py              # Thin OpenAI client with function-calling support
 │   ├── memory.py           # Semantic graph-memory layer (graphiti-core)
 │   ├── seed_hospital.py    # Seeds Neo4j + Graphiti from CSV data
-│   └── tools.py            # Tool schemas + execution dispatcher (9 tools)
+│   └── tools.py            # Tool schemas + execution dispatcher (12 tools)
 ├── scripts/
 │   ├── generate_hospital_data.py  # Generates synthetic doctor/slot CSVs
 │   ├── slot_modifier.py           # Simulates real-time schedule changes

@@ -81,15 +81,30 @@ class HospitalApiClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_family_members(self, phone: str) -> list[dict]:
+        response = await self.client.get(f"/patients/{phone}/members")
+        response.raise_for_status()
+        return response.json()
+
+    async def register_family_member(
+        self, phone: str, name: str, age: int, gender: str, relationship: str
+    ) -> dict:
+        data = {"name": name, "age": age, "gender": gender, "relationship": relationship}
+        response = await self.client.post(f"/patients/{phone}/members", json=data)
+        response.raise_for_status()
+        return response.json()
+
     async def book_slot(
         self,
         slot_id: int,
         patient_phone: str,
-        patient_name: str,
+        member_name: str | None = None,
     ) -> dict | None:
         data = {"slot_id": slot_id, "patient_phone": patient_phone}
+        if member_name:
+            data["member_name"] = member_name
         response = await self.client.post("/bookings", json=data)
-        if response.status_code == 409: # Slot unavailable
+        if response.status_code == 409:
             return None
         response.raise_for_status()
         return response.json()

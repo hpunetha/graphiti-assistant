@@ -20,6 +20,7 @@ async def _create_indexes(db: HospitalDB) -> None:
         "CREATE INDEX IF NOT EXISTS FOR (s:Slot) ON (s.appointment_date)",
         "CREATE INDEX IF NOT EXISTS FOR (p:Patient) ON (p.phone)",
         "CREATE INDEX IF NOT EXISTS FOR (b:Booking) ON (b.booking_id)",
+        "CREATE INDEX IF NOT EXISTS FOR (fm:FamilyMember) ON (fm.phone)",
     ]
     async with db._driver.session() as session:
         for idx in indexes:
@@ -115,7 +116,8 @@ async def _load_bookings(db: HospitalDB) -> None:
                 CREATE (b:Booking {
                     booking_id: $booking_id,
                     booking_status: $booking_status,
-                    booked_at: $booked_at
+                    booked_at: $booked_at,
+                    patient_name: $patient_name
                 })
                 CREATE (p)-[:MADE_BOOKING]->(b)
                 CREATE (b)-[:BOOKED_IN]->(s)
@@ -130,6 +132,7 @@ async def _load_bookings(db: HospitalDB) -> None:
                 booking_id=int(row["booking_id"]),
                 booking_status=row["booking_status"],
                 booked_at=str(row["booked_at"]),
+                patient_name=row["patient_name"],
             )
     print(f"  Loaded {len(df)} bookings with patients.")
 
