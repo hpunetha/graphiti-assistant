@@ -334,8 +334,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "recall_patient_history",
             "description": (
                 "Retrieve a patient's historical profile, including past symptoms, "
-                "allergies, and preferences. Use this when a patient asks for medical advice "
-                "or when you need context on their past preferences."
+                "allergies, relationships (e.g. 'caller is father'), and preferences. "
+                "Use this to answer questions like 'what can you tell me about my son' "
+                "by querying for 'son', 'father', or the patient's name."
             ),
             "parameters": {
                 "type": "object",
@@ -346,7 +347,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                     "query": {
                         "type": "string",
-                        "description": "What specifically to look for (e.g., 'allergies', 'time preferences', or 'general health history')",
+                        "description": "What specifically to look for (e.g., 'allergies', 'time preferences', 'son', or 'general health history')",
                     },
                 },
                 "required": ["patient_phone", "query"],
