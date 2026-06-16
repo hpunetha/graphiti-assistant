@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
+
+from app.providers import build_embedder, build_llm_client
 from graphiti_core.search.search_config import (
     EdgeReranker,
     EdgeSearchConfig,
@@ -68,9 +70,13 @@ class GraphMemory:
     """Temporal knowledge-graph memory backed by Graphiti + Neo4j."""
 
     def __init__(self, uri: str, user: str, password: str) -> None:
-        # Graphiti connects to Neo4j over Bolt and defaults to OpenAI for the
-        # extraction LLM + embeddings (set OPENAI_API_KEY in the environment).
-        self.client = Graphiti(uri, user, password)
+        self.client = Graphiti(
+            uri,
+            user,
+            password,
+            llm_client=build_llm_client(),
+            embedder=build_embedder(),
+        )
 
     async def setup(self) -> None:
         """One-time: create the indices and constraints Graphiti relies on."""
