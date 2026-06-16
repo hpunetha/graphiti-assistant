@@ -89,7 +89,7 @@ When a patient connects, the agent can use `recall_patient_history` to understan
 ### Requirements
 - **Docker + Docker Compose** (for Neo4j)
 - **Python 3.10+** (Virtual environment recommended)
-- An **OpenAI API key**
+- An API key for your chosen LLM/embedder provider (OpenAI by default)
 
 ### 1. Start Neo4j
 Start the Neo4j database using Docker Compose.
@@ -106,12 +106,34 @@ uv sync
 *(Alternatively, you can use `pip install -r requirements.txt`)*
 
 ### 3. Configure Environment
-Copy the example config and add your OpenAI API key.
+Copy the example config and fill in your settings.
 ```bash
 cp .env.example .env
 ```
-Edit `.env` and set:
-`OPENAI_API_KEY=your_sk_key_here`
+Edit `.env`. The minimum required field is:
+```
+OPENAI_API_KEY=your_sk_key_here
+```
+
+**Changing LLM or embedder provider** — both are independently configurable via env vars:
+```
+# LLM used by Graphiti for graph extraction (openai | anthropic | gemini | groq | ollama)
+GRAPHITI_LLM_PROVIDER=openai
+GRAPHITI_LLM_MODEL=gpt-4o-mini
+
+# Embedder for vector search (openai | ollama | gemini | voyage | huggingface)
+GRAPHITI_EMBEDDER_PROVIDER=openai
+GRAPHITI_EMBEDDER_MODEL=text-embedding-3-small
+EMBEDDING_DIM=1024
+```
+
+HuggingFace embedders (EmbeddingGemma, nomic-embed-text, BGE, etc.) require an optional install (not included by default due to the torch dependency):
+```bash
+pip install sentence-transformers
+```
+Then set `GRAPHITI_EMBEDDER_PROVIDER=huggingface` and `GRAPHITI_EMBEDDER_MODEL=<hf-repo-id>`.
+
+> **Warning:** `EMBEDDING_DIM` is baked into the Neo4j vector index. Switching to a model with a different dimension requires wiping and rebuilding the graph.
 
 ---
 
@@ -302,6 +324,7 @@ This means you can easily swap the CLI `input()` and `print()` statements with S
 │   ├── db.py               # Async Neo4j layer for Cypher queries (atomic bookings, slots)
 │   ├── llm.py              # Thin OpenAI client with function-calling support
 │   ├── memory.py           # Semantic graph-memory layer (graphiti-core)
+│   ├── providers.py        # LLM + embedder factory (swap provider via .env, no code change)
 │   ├── seed_hospital.py    # Seeds Neo4j + Graphiti from CSV data
 │   └── tools.py            # Tool schemas + execution dispatcher (9 tools)
 ├── scripts/
