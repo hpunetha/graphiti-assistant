@@ -644,3 +644,185 @@ class TestWebSocketMode:
                 ws.send_text("hi")
                 reply = ws.receive_json()
         assert reply["message"] == raw
+
+
+# ===========================================================================
+# 9. Phase 2 — _extract_patient_phone helper (unit tests)
+# ===========================================================================
+
+
+class TestExtractPatientPhone:
+    """Unit tests for the _extract_patient_phone helper in app/api.py."""
+
+    def _extract(self, messages):
+        from app.api import _extract_patient_phone
+        return _extract_patient_phone(messages)
+
+    def _tool_msg(self, content: dict) -> dict:
+        return {"role": "tool", "content": json.dumps(content)}
+
+    def test_returns_phone_from_identify_patient_result(self):
+        msgs = [
+            {"role": "user", "content": "hi"},
+            self._tool_msg({"status": "found", "patient": {"phone": "9876543210", "name": "Alice"}}),
+        ]
+        assert self._extract(msgs) == "9876543210"
+
+    def test_returns_none_when_no_tool_messages(self):
+        msgs = [
+            {"role": "system", "content": "You are MedBook."},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "What is your phone?"},
+        ]
+        assert self._extract(msgs) is None
+
+    def test_returns_none_when_patient_key_missing(self):
+        msgs = [self._tool_msg({"status": "ok", "data": {}})]
+        assert self._extract(msgs) is None
+
+    def test_returns_none_when_phone_is_none(self):
+        msgs = [self._tool_msg({"status": "found", "patient": {"phone": None}})]
+        assert self._extract(msgs) is None
+
+    def test_returns_none_for_malformed_json(self):
+        msgs = [{"role": "tool", "content": "not-json"}]
+        assert self._extract(msgs) is None
+
+    def test_scans_only_last_ten_messages(self):
+        """Phone in message 1 of a 12-message list should NOT be found (outside window)."""
+        old_tool = self._tool_msg({"status": "found", "patient": {"phone": "1111111111"}})
+        filler = [{"role": "user", "content": "x"}] * 11
+        msgs = [old_tool] + filler
+        assert self._extract(msgs) is None
+
+    def test_most_recent_phone_wins(self):
+        """The most recently identified phone takes priority."""
+        msgs = [
+            self._tool_msg({"status": "found", "patient": {"phone": "1111111111"}}),
+            self._tool_msg({"status": "found", "patient": {"phone": "9999999999"}}),
+        ]
+        assert self._extract(msgs) == "9999999999"
+
+    def test_non_tool_messages_with_patient_key_ignored(self):
+        """assistant/user messages that happen to contain 'patient' are not parsed."""
+        msgs = [
+            {"role": "assistant", "content": json.dumps({"patient": {"phone": "1234567890"}})},
+        ]
+        assert self._extract(msgs) is None
+
+    def test_empty_messages_list(self):
+        assert self._extract([]) is None
+
+    def test_phone_returned_as_string(self):
+        msgs = [self._tool_msg({"patient": {"phone": 9876543210}})]
+        result = self._extract(msgs)
+        assert isinstance(result, str)
+        assert result == "9876543210"
+
+
+# ===========================================================================
+# 10. Phase 2 — auto_ingest triggered in REST and WS handlers
+# ===========================================================================
+
+
+class TestAutoIngest:
+    """Verify auto_ingest is fired (fire-and-forget) when a patient phone is known."""
+
+    def _tool_msg(self, phone: str) -> dict:
+        return {
+            "role": "tool",
+            "content": json.dumps({"status": "found", "patient": {"phone": phone}}),
+        }
+
+    def test_rest_auto_ingest_called_when_phone_found(self, client):
+        """POST /chat schedules auto_ingest when identify_patient tool result is in history."""
+        prior_messages = [
+            {"role": "system", "content": "You are MedBook."},
+            self._tool_msg("9876543210"),
+        ]
+
+        with patch("app.api._schedule_auto_ingest") as mock_schedule, \
+             mock_agent_reply("Great, booking confirmed!"):
+            client.post(
+                "/chat",
+                json={"user_message": "book it", "messages": prior_messages},
+            )
+
+        mock_schedule.assert_called_once()
+        _, user_msg, reply, phone = mock_schedule.call_args.args
+        assert phone == "9876543210"
+        assert user_msg == "book it"
+
+    def test_rest_auto_ingest_not_called_without_phone(self, client):
+        """POST /chat must NOT schedule auto_ingest when no phone has been discovered."""
+        with patch("app.api._schedule_auto_ingest") as mock_schedule, \
+             mock_agent_reply("What is your phone number?"):
+            client.post("/chat", json={"user_message": "I have a headache"})
+
+        mock_schedule.assert_not_called()
+
+    def test_ws_auto_ingest_called_when_phone_in_history(self, client):
+        """WS handler schedules auto_ingest after agent_loop when phone is discoverable."""
+        tool_result = json.dumps({"status": "found", "patient": {"phone": "8888888888"}})
+
+        async def fake_loop(llm, db, memory, messages, user_msg):
+            messages.append({"role": "tool", "content": tool_result})
+            return "Found your profile!"
+
+        with patch("app.api._schedule_auto_ingest") as mock_schedule, \
+             patch("app.api.agent_loop", new=fake_loop):
+            with client.websocket_connect("/ws/chat") as ws:
+                ws.receive_json()
+                ws.send_text("My number is 8888888888")
+                ws.receive_json()
+
+        mock_schedule.assert_called_once()
+        _, user_msg, reply, phone = mock_schedule.call_args.args
+        assert phone == "8888888888"
+
+
+# ===========================================================================
+# 11. Phase 2 — typed recall methods called by tools
+# ===========================================================================
+
+
+class TestTypedRecall:
+    """Verify tools.py routes to the correct memory method for typed retrieval."""
+
+    def test_recall_patient_history_uses_typed_method(self):
+        """_recall_patient_history must call recall_patient_facts, not the legacy recall."""
+        import asyncio
+
+        import app.tools as tools_module
+
+        mock_mem = AsyncMock()
+        mock_mem.recall_patient_facts = AsyncMock(return_value=["Patient prefers evening slots"])
+        mock_mem.recall = AsyncMock(return_value=[])
+
+        # Signature: _recall_patient_history(memory, phone, query)
+        asyncio.new_event_loop().run_until_complete(
+            tools_module._recall_patient_history(mock_mem, "9876543210", "allergies preferences")
+        )
+
+        mock_mem.recall_patient_facts.assert_called_once()
+        mock_mem.recall.assert_not_called()
+
+    def test_suggest_speciality_uses_medical_knowledge_method(self):
+        """_suggest_speciality must call recall_medical_knowledge, not the legacy recall."""
+        import asyncio
+
+        import app.tools as tools_module
+
+        mock_db = AsyncMock()
+        mock_db.get_all_specialities = AsyncMock(return_value=["Cardiology"])
+        mock_mem = AsyncMock()
+        mock_mem.recall_medical_knowledge = AsyncMock(return_value=["Cardiologist for chest pain"])
+        mock_mem.recall = AsyncMock(return_value=[])
+
+        # Signature: _suggest_speciality(db, memory, symptoms, age=None, gender=None)
+        asyncio.new_event_loop().run_until_complete(
+            tools_module._suggest_speciality(mock_db, mock_mem, "chest pain")
+        )
+
+        mock_mem.recall_medical_knowledge.assert_called_once()
+        mock_mem.recall.assert_not_called()

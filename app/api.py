@@ -10,6 +10,8 @@ Usage:
   uvicorn app.api:app --reload
 """
 
+import asyncio
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -146,6 +148,10 @@ async def chat(req: ChatRequest):
 
     try:
         reply = await agent_loop(llm, db, memory, messages, req.user_message)
+        # Background: auto-ingest this turn into Graphiti once the patient is known.
+        phone = _extract_patient_phone(messages)
+        if phone:
+            _schedule_auto_ingest(memory, req.user_message, reply, phone)
         if mode == TTS:
             reply = to_tts(reply)
         return {"reply": reply, "messages": messages}
@@ -158,12 +164,39 @@ async def chat(req: ChatRequest):
 # WebSocket Stateful Chat
 # ------------------------------------------------------------------
 
+
+def _schedule_auto_ingest(
+    mem: "GraphMemory", user_msg: str, reply: str, phone: str
+) -> None:
+    """Wrap asyncio.create_task for auto_ingest so tests can mock it cleanly."""
+    asyncio.create_task(mem.auto_ingest(user_msg, reply, phone))
+
+
+def _extract_patient_phone(messages: list[dict]) -> str | None:
+    """Scan recent tool results for an identify_patient response that has a phone.
+
+    The identify_patient tool returns {"status": ..., "patient": {"phone": ..., ...}}.
+    We scan the last 10 messages in reverse so we find the most recent call first.
+    """
+    for msg in reversed(messages[-10:]):
+        if msg.get("role") == "tool":
+            try:
+                data = json.loads(msg["content"])
+                phone = (data.get("patient") or {}).get("phone")
+                if phone:
+                    return str(phone)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+    return None
+
+
 class Session:
-    """Per-connection chat state: conversation history + output mode."""
+    """Per-connection chat state: conversation history, output mode, and patient phone."""
 
     def __init__(self, mode: str = UI):
         self.mode = normalize_mode(mode)
         self.messages = _get_initial_messages(self.mode)
+        self.patient_phone: str | None = None
 
 
 class ConnectionManager:
@@ -244,6 +277,11 @@ async def websocket_chat(websocket: WebSocket):
 
             try:
                 reply = await agent_loop(llm, db, memory, session.messages, data)
+                # Cache phone once identified; fire background memory ingest.
+                if not session.patient_phone:
+                    session.patient_phone = _extract_patient_phone(session.messages)
+                if session.patient_phone:
+                    _schedule_auto_ingest(memory, data, reply, session.patient_phone)
                 if session.mode == TTS:
                     reply = to_tts(reply)
                 await websocket.send_json({

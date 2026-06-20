@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from app.ontology import PATIENT_ENTITY_TYPES, HOSPITAL_ENTITY_TYPES, EXTRACTION_INSTRUCTIONS; print\\('entity types:', list\\(PATIENT_ENTITY_TYPES\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"from app.memory import GraphMemory, quiet_graphiti_logs; print\\('memory OK'\\)\")",
+      "Bash(python -c \"from app.tools import execute_tool; print\\('tools OK'\\)\")"
+    ]
+  }
+}
