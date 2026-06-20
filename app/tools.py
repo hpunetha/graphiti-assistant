@@ -84,8 +84,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "search_doctors",
             "description": (
                 "Search for doctors by speciality or by name. Provide either "
-                "speciality or name (or both). Returns doctor details including "
-                "qualifications, experience, and languages."
+                "speciality or name (or both). Returns full doctor details "
+                "(name, speciality, qualification, experience, languages). "
+                "Present only name and speciality by default; share other "
+                "details only if the user explicitly asks."
             ),
             "parameters": {
                 "type": "object",
@@ -470,17 +472,16 @@ async def _search_doctors(
     if not results:
         return {"message": "No doctors found matching your criteria."}
 
-    # Format for readability
     doctors = []
     for doc in results:
         doctors.append({
             "doctor_record_id": doc["doctor_record_id"],
             "name": doc["name"],
             "speciality": doc["speciality"],
+            "gender": doc["gender"],
             "qualification": doc["qualification"],
             "experience": doc["experience"],
             "languages": doc["languages_spoken"],
-            "gender": doc["gender"],
         })
     return {"doctors": doctors}
 

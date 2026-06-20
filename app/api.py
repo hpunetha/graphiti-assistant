@@ -24,8 +24,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app.assistant import SYSTEM_PROMPT, agent_loop
+from app.assistant import agent_loop, build_system_prompt
 from app.api_client import HospitalApiClient
+from app.formatting import TTS, UI, normalize_mode, to_tts
 from app.llm import LLM
 from app.logger import get_logger
 from app.memory import GraphMemory, quiet_graphiti_logs
@@ -86,7 +87,7 @@ app.add_middleware(
 )
 
 
-def _get_initial_messages() -> list[dict[str, Any]]:
+def _get_initial_messages(mode: str = UI) -> list[dict[str, Any]]:
     tz_name = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
@@ -95,9 +96,7 @@ def _get_initial_messages() -> list[dict[str, Any]]:
     return [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT.format(
-                today=today, current_time=current_time, timezone=tz_name
-            ),
+            "content": build_system_prompt(today, current_time, tz_name, mode),
         }
     ]
 
@@ -113,6 +112,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     user_message: str
     messages: list[ChatMessage] | None = None
+    response_mode: str = UI  # "ui" (rich) or "tts" (spoken-friendly)
 
 
 @app.get("/health")
@@ -130,15 +130,24 @@ async def ws_test_ui():
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    """Stateless REST endpoint. Send previous messages if you want context."""
+    """Stateless REST endpoint. Send previous messages if you want context.
+
+    Set ``response_mode`` to ``"tts"`` for spoken-friendly replies (no markdown
+    or emoji, numbers/times/prices spelled out as words). When you supply your
+    own ``messages``, the system prompt you send governs the model's style; the
+    sanitizer still guarantees clean output for ``tts``.
+    """
+    mode = normalize_mode(req.response_mode)
     messages = (
         [m.model_dump(exclude_none=True) for m in req.messages]
         if req.messages
-        else _get_initial_messages()
+        else _get_initial_messages(mode)
     )
-    
+
     try:
         reply = await agent_loop(llm, db, memory, messages, req.user_message)
+        if mode == TTS:
+            reply = to_tts(reply)
         return {"reply": reply, "messages": messages}
     except Exception as exc:
         log.exception("Error in POST /chat")
@@ -149,23 +158,42 @@ async def chat(req: ChatRequest):
 # WebSocket Stateful Chat
 # ------------------------------------------------------------------
 
+class Session:
+    """Per-connection chat state: conversation history + output mode."""
+
+    def __init__(self, mode: str = UI):
+        self.mode = normalize_mode(mode)
+        self.messages = _get_initial_messages(self.mode)
+
+
 class ConnectionManager:
     def __init__(self):
-        # Maps session_id -> list of messages
-        self.sessions: dict[str, list[dict[str, Any]]] = {}
+        # Maps session_id -> Session
+        self.sessions: dict[str, Session] = {}
 
-    def create_session(self) -> str:
+    def create_session(self, mode: str = UI) -> str:
         session_id = str(uuid.uuid4())
-        self.sessions[session_id] = _get_initial_messages()
+        self.sessions[session_id] = Session(mode)
         return session_id
 
-    def get_messages(self, session_id: str) -> list[dict[str, Any]]:
+    def get_session(self, session_id: str) -> Session:
         if session_id not in self.sessions:
-            self.sessions[session_id] = _get_initial_messages()
+            self.sessions[session_id] = Session()
         return self.sessions[session_id]
 
     def reset_session(self, session_id: str):
-        self.sessions[session_id] = _get_initial_messages()
+        # Preserve the session's output mode across a reset.
+        mode = self.sessions[session_id].mode if session_id in self.sessions else UI
+        self.sessions[session_id] = Session(mode)
+
+    def set_mode(self, session_id: str, mode: str):
+        """Switch output mode mid-conversation, rebuilding the system prompt."""
+        session = self.get_session(session_id)
+        session.mode = normalize_mode(mode)
+        session.messages[0] = _get_initial_messages(session.mode)[0]
+
+    def remove_session(self, session_id: str):
+        self.sessions.pop(session_id, None)
 
 
 manager = ConnectionManager()
@@ -174,32 +202,50 @@ manager = ConnectionManager()
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     await websocket.accept()
-    session_id = manager.create_session()
-    
+    # Output mode is chosen at connect time via ?mode=tts (defaults to ui).
+    mode = normalize_mode(websocket.query_params.get("mode"))
+    session_id = manager.create_session(mode)
+
     await websocket.send_json({
         "type": "connected",
         "session_id": session_id,
+        "mode": mode,
         "message": "Connected to MedBook API."
     })
-    
-    log.info("WebSocket connected: %s", session_id)
+
+    log.info("WebSocket connected: %s (mode: %s)", session_id, mode)
 
     try:
         while True:
             data = await websocket.receive_text()
-            
-            if data.lower().strip() == "reset":
+            command = data.lower().strip()
+
+            if command == "reset":
                 manager.reset_session(session_id)
                 await websocket.send_json({
                     "type": "system",
                     "message": "--- Conversation reset. Start fresh! ---"
                 })
                 continue
-                
-            messages = manager.get_messages(session_id)
-            
+
+            # Runtime mode switch: "mode: tts" / "mode: ui"
+            if command.startswith("mode:"):
+                requested = command.split(":", 1)[1].strip()
+                manager.set_mode(session_id, requested)
+                new_mode = manager.get_session(session_id).mode
+                await websocket.send_json({
+                    "type": "system",
+                    "mode": new_mode,
+                    "message": f"--- Output mode set to {new_mode}. ---"
+                })
+                continue
+
+            session = manager.get_session(session_id)
+
             try:
-                reply = await agent_loop(llm, db, memory, messages, data)
+                reply = await agent_loop(llm, db, memory, session.messages, data)
+                if session.mode == TTS:
+                    reply = to_tts(reply)
                 await websocket.send_json({
                     "type": "reply",
                     "message": reply
@@ -210,8 +256,7 @@ async def websocket_chat(websocket: WebSocket):
                     "type": "error",
                     "message": "Sorry, something went wrong processing your request."
                 })
-                
+
     except WebSocketDisconnect:
         log.info("WebSocket disconnected: %s", session_id)
-        # We could delete the session here, but keeping it allows reconnects
-        # if the client somehow knew its session_id (not implemented yet).
+        manager.remove_session(session_id)

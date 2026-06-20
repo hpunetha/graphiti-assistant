@@ -202,6 +202,10 @@ uv run pytest tests/ -v
 | `TestPostChat` | 9 | Fresh session, messages array structure, valid roles, prior context passthrough, user message appended, empty message, exception handling, multi-turn growth, 422 on missing field |
 | `TestWebSocketChat` | 9 | Connect + unique session ID, greeting type, send/receive reply, reset command, case-insensitive reset, multi-turn context, error type on exception, unique IDs per connection, reset-then-continue |
 | `TestDocs` | 2 | Swagger UI accessible, OpenAPI schema contains expected paths |
+| `TestToTts` | 17 | Markdown stripping (bold, headers, emoji, links, bullet lists), plain prose pass-through, number-to-words (times, currency ₹/$, ISO dates, phones digit-by-digit, ordinals, percent, decimals, integers), combined reply has zero raw digits |
+| `TestBuildSystemPrompt` | 4 | UI mode includes markdown guidance, TTS mode includes spoken/voice guidance and forbids markdown, unknown mode falls back to UI |
+| `TestPostChatTtsMode` | 4 | `response_mode=tts` strips markdown and spells digits; UI mode preserves raw reply; invalid mode defaults to UI |
+| `TestWebSocketMode` | 6 | `?mode=tts` echoed in greeting, default is `ui`, TTS mode strips markdown and digits, runtime `mode:` switch command acks and takes effect, UI mode preserves raw reply |
 
 > **Note:** The one pydantic deprecation warning comes from `graphiti_core` internals — nothing to fix on your end.
 
@@ -306,11 +310,44 @@ bot > ✅ Confirmed! Your appointment is booked:
 
 ---
 
-## 🎙️ STT/TTS Readiness
+## 🎙️ TTS / Voice Output Mode
 
-The architecture is designed so the chat interface is a thin, decoupled layer. The agent core (`tools.py`, `db.py`, `assistant.py` agent loop) only processes and returns strings. 
+MedBook supports two output modes, switchable per session without any code changes:
 
-This means you can easily swap the CLI `input()` and `print()` statements with Speech-to-Text (STT) and Text-to-Speech (TTS) modules to create a voice-driven phone assistant, without changing any of the agent logic or conversation history tracking.
+| Mode | Format | Best for |
+|------|--------|----------|
+| `ui` (default) | Rich text — markdown, emoji, formatted slot lists, raw booking IDs | Web/mobile chat UIs |
+| `tts` | Plain spoken language — no markdown/emoji, every number/time/price/date spelled as words | Text-to-speech engines, voice assistants |
+
+In TTS mode, `app/formatting.py` post-processes every reply with a deterministic sanitizer *and* the model is primed with a spoken-style system prompt, so both layers agree. Examples of what the sanitizer does:
+
+- `6:40 PM` → "six forty PM"
+- `₹500` → "five hundred rupees"
+- `2026-06-20` → "June twentieth, twenty twenty-six"
+- `9876543210` → "nine eight seven six …" (digit-by-digit)
+- `**Confirmed!** 🏥` → "Confirmed!"
+
+### Selecting the mode
+
+**WebSocket** — append `?mode=tts` to the connection URL:
+```bash
+wscat -c "ws://localhost:8000/ws/chat?mode=tts"
+```
+Switch mid-conversation by sending the text command `mode: tts` or `mode: ui`.
+
+**REST** — add `response_mode` to the request body:
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_message": "book the 9am slot", "response_mode": "tts"}'
+```
+
+**CLI** — pass `--tts` when starting the assistant:
+```bash
+python -m app.assistant --tts
+```
+
+The browser tester at `/ws-test` has a UI/TTS toggle in the sidebar.
 
 ---
 
@@ -322,18 +359,19 @@ This means you can easily swap the CLI `input()` and `print()` statements with S
 │   ├── api.py              # FastAPI app — REST (POST /chat) + WebSocket (/ws/chat)
 │   ├── assistant.py        # Agentic tool-calling loop + CLI interface
 │   ├── db.py               # Async Neo4j layer for Cypher queries (atomic bookings, slots)
+│   ├── formatting.py       # Output-mode constants + to_tts() sanitizer (markdown/digit rewriting)
 │   ├── llm.py              # Thin OpenAI client with function-calling support
 │   ├── memory.py           # Semantic graph-memory layer (graphiti-core)
 │   ├── providers.py        # LLM + embedder factory (swap provider via .env, no code change)
 │   ├── seed_hospital.py    # Seeds Neo4j + Graphiti from CSV data
-│   └── tools.py            # Tool schemas + execution dispatcher (9 tools)
+│   └── tools.py            # Tool schemas + execution dispatcher (11 tools)
 ├── scripts/
 │   ├── generate_hospital_data.py  # Generates synthetic doctor/slot CSVs
 │   ├── slot_modifier.py           # Simulates real-time schedule changes
 │   └── smoke_test.py              # End-to-end tool verification (no chat loop)
 ├── tests/
 │   ├── conftest.py         # Suppresses FastAPI lifespan for offline testing
-│   └── test_api.py         # 22 unit tests for REST + WebSocket endpoints
+│   └── test_api.py         # 55 unit tests for REST + WebSocket endpoints + TTS sanitizer
 ├── data/
 │   └── symptom_speciality_map.csv  # Symptom → speciality curated mapping
 ├── api_usage_guide.md      # Full API usage guide with mock conversation examples

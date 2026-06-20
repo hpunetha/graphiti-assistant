@@ -345,6 +345,14 @@
     </button>
 
     <hr class="divider" />
+    <h2>Output Mode</h2>
+    <select id="mode-select" class="quick-btn" onchange="onModeChange()">
+      <option value="ui">🖥️ UI (rich text)</option>
+      <option value="tts">🔊 TTS (spoken)</option>
+    </select>
+    <div class="ql" style="padding:0 2px">Applied on connect; switches live if connected.</div>
+
+    <hr class="divider" />
     <h2>Session</h2>
     <button class="danger-btn" onclick="sendReset()">🔄 Reset conversation</button>
   </aside>
@@ -378,9 +386,21 @@
     }
   }
 
+  function currentMode() {
+    return document.getElementById('mode-select').value;
+  }
+
+  // Switch mode live (server supports the "mode: <ui|tts>" command), or it
+  // takes effect on the next connect via the ?mode= query param.
+  function onModeChange() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(`mode: ${currentMode()}`);
+    }
+  }
+
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url   = `${proto}://${location.host}/ws/chat`;
+    const url   = `${proto}://${location.host}/ws/chat?mode=${currentMode()}`;
     ws = new WebSocket(url);
 
     ws.onopen = () => {
@@ -394,7 +414,7 @@
       if (data.type === 'connected') {
         document.getElementById('session-badge').textContent = `session: ${data.session_id.slice(0,8)}…`;
         document.getElementById('session-badge').style.display = 'block';
-        appendMsg('system', `✅ Connected  •  session: ${data.session_id}`);
+        appendMsg('system', `✅ Connected  •  mode: ${data.mode || 'ui'}  •  session: ${data.session_id}`);
         enableInput(true);
         return;
       }
