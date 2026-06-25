@@ -16,6 +16,12 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from app.memory import GraphMemory, quiet_graphiti_logs
+from app.ontology import (
+    EXTRACTION_INSTRUCTIONS,
+    HOSPITAL_EDGE_TYPE_MAP,
+    HOSPITAL_EDGE_TYPES,
+    HOSPITAL_ENTITY_TYPES,
+)
 
 load_dotenv()
 quiet_graphiti_logs()
@@ -61,7 +67,15 @@ async def _seed_graphiti(memory: GraphMemory, api_url: str) -> None:
             f"Experience: {doc.get('experience', '')}. "
             f"Doctor ID: {doc['doctor_record_id']}."
         )
-        await memory.remember(episode, user_id=group_id, source_desc="doctor_profile")
+        await memory.remember(
+            episode,
+            user_id=group_id,
+            source_desc="doctor_profile",
+            entity_types=HOSPITAL_ENTITY_TYPES,
+            edge_types=HOSPITAL_EDGE_TYPES,
+            edge_type_map=HOSPITAL_EDGE_TYPE_MAP,
+            instructions=EXTRACTION_INSTRUCTIONS,
+        )
         print(f"    [ok] {doc['name']}")
 
     # --- Symptom-to-speciality mappings ---
@@ -77,7 +91,15 @@ async def _seed_graphiti(memory: GraphMemory, api_url: str) -> None:
             f"Applicable age group: {row['age_group']}. "
             f"Gender relevance: {row['gender_relevance']}."
         )
-        await memory.remember(episode, user_id=group_id, source_desc="symptom_mapping")
+        await memory.remember(
+            episode,
+            user_id=group_id,
+            source_desc="symptom_mapping",
+            entity_types=HOSPITAL_ENTITY_TYPES,
+            edge_types=HOSPITAL_EDGE_TYPES,
+            edge_type_map=HOSPITAL_EDGE_TYPE_MAP,
+            instructions=EXTRACTION_INSTRUCTIONS,
+        )
         print(f"    [ok] {row['speciality']}")
 
     # --- Age-based routing rules ---

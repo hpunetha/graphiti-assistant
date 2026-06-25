@@ -33,6 +33,20 @@ Open in browser: http://localhost:8000/docs
 Each request is independent. To maintain context, pass the `messages` array
 returned from the previous response back into the next request.
 
+### Output modes
+Add `"response_mode": "tts"` to any request for spoken-friendly replies — no
+markdown, emoji, or raw digits; every number/time/price/date is spelled as words
+so a TTS engine pronounces them naturally.
+
+```bash
+# TTS-friendly reply
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_message": "I have a bad headache", "response_mode": "tts"}'
+```
+
+Omit `response_mode` (or set it to `"ui"`) for the default rich-text replies.
+
 ### Turn 1 — First message (fresh session, no messages)
 ```bash
 curl -X POST http://localhost:8000/chat \
@@ -106,6 +120,21 @@ and asks for a preferred date.
 
 ## 4. WebSocket /ws/chat — Stateful (Recommended for Chat UIs)
 
+### Output mode
+Append `?mode=tts` to the WebSocket URL for spoken-friendly replies (no
+markdown, emoji, or raw digits — numbers/times/prices spelled as words).
+Omit it (or use `?mode=ui`) for the default rich-text format.
+
+```bash
+# TTS mode
+wscat -c "ws://localhost:8000/ws/chat?mode=tts"
+
+# UI mode (default)
+wscat -c ws://localhost:8000/ws/chat
+```
+
+Switch mode mid-conversation by sending the command `mode: tts` or `mode: ui`.
+
 ### Connect with wscat (install: `npm install -g wscat`)
 ```bash
 wscat -c ws://localhost:8000/ws/chat
@@ -116,6 +145,7 @@ wscat -c ws://localhost:8000/ws/chat
 {
   "type": "connected",
   "session_id": "a1b2c3d4-...",
+  "mode": "ui",
   "message": "Connected to MedBook API."
 }
 ```

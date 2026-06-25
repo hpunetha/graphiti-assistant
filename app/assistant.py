@@ -23,12 +23,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
 from app.api_client import HospitalApiClient
+from app.formatting import TTS, UI, normalize_mode, to_tts
 from app.llm import LLM
 from app.logger import get_logger
 from app.memory import GraphMemory, quiet_graphiti_logs
@@ -39,7 +41,7 @@ quiet_graphiti_logs()
 
 log = get_logger(__name__)
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_BASE = """\
 You are MedBook, a friendly and professional hospital appointment booking assistant.
 Your job is to help callers find the right doctor and book appointments.
 
@@ -67,6 +69,10 @@ Today's date is {today}. Current time is {current_time} ({timezone}).
    - Describe symptoms → use suggest_speciality to find the right specialist
    - Ask to see their bookings → use get_my_bookings
    - Want to cancel → use cancel_booking
+
+   **When presenting a doctor, mention only their name and speciality.**
+   Do NOT volunteer qualifications, experience, or languages unless the patient
+   explicitly asks for that detail.
 
 4. **Find available slots** — Once a doctor is identified, ask what date works
    for them. Then ask (or infer from their message/history) what time of day they prefer:
@@ -96,10 +102,47 @@ Today's date is {today}. Current time is {current_time} ({timezone}).
 - If a patient mentions pregnancy or women's health, recommend Gynecology
   or Fetal Medicine specialists.
 - Never invent information about doctors or slots — only use what the tools return.
-- When showing slots, display them in a clear, readable format.
-- When a booking is confirmed, show all the details: doctor, date, time, booking ID.
 - You can handle multiple bookings in one conversation.
+
+{style_block}
 """
+
+# Presentation guidance for a screen/chat UI: rich text is welcome.
+UI_STYLE_BLOCK = """\
+## Response Style (screen / chat UI)
+- You may use light markdown (bold, bullet lists) and the occasional emoji to keep replies friendly and scannable.
+- When showing slots, display them in a clear, readable list.
+- When a booking is confirmed, show all the details: doctor, date, time, and booking ID."""
+
+# Presentation guidance for a text-to-speech engine: write for the ear.
+# A deterministic sanitizer (app.formatting.to_tts) also runs on the final
+# reply, but matching styles here keeps the spoken output clean and natural.
+TTS_STYLE_BLOCK = """\
+## Response Style (voice / text-to-speech)
+Your reply will be read aloud by a TTS engine, so write plain spoken language:
+- NO markdown, asterisks, headers, bullet points, or emoji — they get read out literally.
+- Use short, natural, conversational sentences.
+- Write every number, time, price, and date as spoken WORDS, not digits
+  (e.g. "six forty in the evening", "five hundred rupees", "June twentieth"), not "6:40 PM", "₹500", "2026-06-20".
+- Offer at most two or three slots at a time and ask if they'd like to hear more.
+- Do NOT read out raw IDs or URLs. Confirm a booking by doctor, date, and time; give the booking ID digit by digit only if the caller asks for it.
+- End with one clear question so the caller knows what to say next."""
+
+_STYLE_BLOCKS = {UI: UI_STYLE_BLOCK, TTS: TTS_STYLE_BLOCK}
+
+
+def build_system_prompt(
+    today: str, current_time: str, timezone: str, mode: str = UI
+) -> str:
+    """Compose the full system prompt for the given output mode (ui/tts)."""
+    style_block = _STYLE_BLOCKS[normalize_mode(mode)]
+    return SYSTEM_PROMPT_BASE.format(
+        today=today,
+        current_time=current_time,
+        timezone=timezone,
+        style_block=style_block,
+    )
+
 
 MAX_TOOL_ITERATIONS = 10  # Safety limit for the agent loop
 
@@ -197,8 +240,11 @@ async def main() -> None:
     if not os.environ.get("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY in your .env file first.")
 
+    # Output mode: pass --tts on the command line for spoken-friendly replies.
+    mode = TTS if "--tts" in sys.argv else UI
+
     hospital_api_url = os.environ.get("HOSPITAL_API_URL", "http://localhost:8001")
-    log.info("Starting MedBook assistant (API: %s)", hospital_api_url)
+    log.info("Starting MedBook assistant (API: %s, mode: %s)", hospital_api_url, mode)
 
     db = HospitalApiClient(hospital_api_url)
     memory = GraphMemory(uri, user, password)
@@ -216,8 +262,8 @@ async def main() -> None:
     today = now.strftime("%Y-%m-%d (%A)")
     current_time = now.strftime("%H:%M")
     messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(
-            today=today, current_time=current_time, timezone=tz_name
+        {"role": "system", "content": build_system_prompt(
+            today, current_time, tz_name, mode
         )},
     ]
 
@@ -261,8 +307,8 @@ async def main() -> None:
                 current_time = now.strftime("%H:%M")
                 tz_name = os.environ.get("APP_TIMEZONE", "Asia/Kolkata")
                 messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT.format(
-                        today=today, current_time=current_time, timezone=tz_name
+                    {"role": "system", "content": build_system_prompt(
+                        today, current_time, tz_name, mode
                     )},
                 ]
                 log.info("Conversation reset by user.")
@@ -275,6 +321,8 @@ async def main() -> None:
                 log.exception("Unexpected error in agent loop: %s", exc)
                 reply = "Sorry, something went wrong on my end. Please try again."
 
+            if mode == TTS:
+                reply = to_tts(reply)
             print(f"\nbot > {reply}\n")
 
     finally:

@@ -30,6 +30,12 @@ from zoneinfo import ZoneInfo
 
 from app.api_client import HospitalApiClient
 from app.memory import GraphMemory
+from app.ontology import (
+    EXTRACTION_INSTRUCTIONS,
+    PATIENT_EDGE_TYPE_MAP,
+    PATIENT_EDGE_TYPES,
+    PATIENT_ENTITY_TYPES,
+)
 
 # Time-of-day slot buckets (HH:MM strings, lexicographic comparison works for HH:MM)
 TIME_BUCKETS: dict[str, tuple[str, str]] = {
@@ -84,8 +90,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "search_doctors",
             "description": (
                 "Search for doctors by speciality or by name. Provide either "
-                "speciality or name (or both). Returns doctor details including "
-                "qualifications, experience, and languages."
+                "speciality or name (or both). Returns full doctor details "
+                "(name, speciality, qualification, experience, languages). "
+                "Present only name and speciality by default; share other "
+                "details only if the user explicitly asks."
             ),
             "parameters": {
                 "type": "object",
@@ -470,17 +478,16 @@ async def _search_doctors(
     if not results:
         return {"message": "No doctors found matching your criteria."}
 
-    # Format for readability
     doctors = []
     for doc in results:
         doctors.append({
             "doctor_record_id": doc["doctor_record_id"],
             "name": doc["name"],
             "speciality": doc["speciality"],
+            "gender": doc["gender"],
             "qualification": doc["qualification"],
             "experience": doc["experience"],
             "languages": doc["languages_spoken"],
-            "gender": doc["gender"],
         })
     return {"doctors": doctors}
 
@@ -503,7 +510,7 @@ async def _suggest_speciality(
     query = ", ".join(query_parts)
 
     # Search Graphiti for relevant symptom mappings and doctor profiles
-    facts = await memory.recall(query, user_id="hospital", limit=10)
+    facts = await memory.recall_medical_knowledge(query, limit=10)
 
     # Also get available specialities from the DB for context
     specialities = await db.get_all_specialities()
@@ -745,14 +752,22 @@ async def _reschedule_booking(
 
 
 async def _record_patient_fact(memory: GraphMemory, phone: str, fact: str) -> dict:
-    """Record a semantic fact about the patient in Graphiti."""
-    await memory.remember(text=fact, user_id=phone, source_desc="patient_fact")
+    """Record a semantic fact about the patient in Graphiti with typed ontology."""
+    await memory.remember(
+        text=fact,
+        user_id=phone,
+        source_desc="patient_fact",
+        entity_types=PATIENT_ENTITY_TYPES,
+        edge_types=PATIENT_EDGE_TYPES,
+        edge_type_map=PATIENT_EDGE_TYPE_MAP,
+        instructions=EXTRACTION_INSTRUCTIONS,
+    )
     return {"status": "saved", "message": f"Recorded patient fact: {fact}"}
 
 
 async def _recall_patient_history(memory: GraphMemory, phone: str, query: str) -> dict:
-    """Retrieve patient history from Graphiti."""
-    facts = await memory.recall(query=query, user_id=phone, limit=5)
+    """Retrieve patient history from Graphiti using typed, scoped retrieval."""
+    facts = await memory.recall_patient_facts(query=query, patient_phone=phone, limit=5)
     if not facts:
         return {"message": "No relevant history found."}
     return {"history": facts}

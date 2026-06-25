@@ -388,3 +388,441 @@ class TestDocs:
         assert "paths" in schema
         assert "/health" in schema["paths"]
         assert "/chat" in schema["paths"]
+
+
+# ===========================================================================
+# 5. app.formatting — to_tts sanitizer (pure unit tests, no network needed)
+# ===========================================================================
+
+
+class TestToTts:
+    """Verify that to_tts produces spoken-friendly text without raw digits or
+    markdown symbols, and that plain prose is not mangled."""
+
+    from app.formatting import to_tts as _to_tts  # class-level import for speed
+
+    def _clean(self, text: str) -> str:
+        from app.formatting import to_tts
+        return to_tts(text)
+
+    # ── Markdown stripping ─────────────────────────────────────────────────
+
+    def test_strips_bold(self):
+        assert "**" not in self._clean("**Confirmed!** See Dr. Smith.")
+
+    def test_strips_headers(self):
+        assert "#" not in self._clean("# Appointment Details\nSee Dr. Smith.")
+
+    def test_strips_emoji(self):
+        result = self._clean("Welcome to City Care Hospital! 🏥")
+        assert "🏥" not in result
+        assert "Hospital" in result
+
+    def test_converts_markdown_link(self):
+        result = self._clean("Visit [our portal](https://example.com) for details.")
+        assert "[" not in result
+        assert "our portal" in result
+        assert "https" not in result
+
+    def test_flattens_bullet_list(self):
+        text = "Available slots:\n- 9:00 AM\n- 5:05 PM\n- 6:40 PM"
+        result = self._clean(text)
+        assert "- " not in result
+        # All slot items still present as text
+        assert "nine" in result
+        assert "five" in result
+
+    def test_plain_prose_unchanged(self):
+        prose = "Please tell me your name."
+        assert self._clean(prose) == prose
+
+    # ── Number to words ────────────────────────────────────────────────────
+
+    def test_time_hhmm_am(self):
+        result = self._clean("9:00 AM")
+        assert "9" not in result
+        assert "nine" in result.lower()
+
+    def test_time_hhmm_pm_with_minutes(self):
+        result = self._clean("6:40 PM")
+        assert "6" not in result
+        assert "six" in result.lower()
+        assert "forty" in result.lower()
+
+    def test_time_odd_minutes(self):
+        result = self._clean("9:05 AM")
+        assert "9" not in result
+        assert "five" in result.lower()
+
+    def test_currency_rupees(self):
+        result = self._clean("The fee is ₹500.")
+        assert "500" not in result
+        assert "five hundred" in result.lower()
+        assert "rupees" in result.lower()
+
+    def test_currency_rupees_decimal(self):
+        result = self._clean("Total: ₹20.50")
+        assert "20" not in result
+        assert "rupees" in result.lower()
+        assert "paise" in result.lower()
+
+    def test_currency_dollars(self):
+        result = self._clean("Cost: $20")
+        assert "20" not in result
+        assert "twenty" in result.lower()
+        assert "dollars" in result.lower()
+
+    def test_date_iso(self):
+        result = self._clean("Appointment on 2026-06-20.")
+        assert "2026" not in result
+        assert "june" in result.lower()
+
+    def test_phone_digit_by_digit(self):
+        result = self._clean("Call 9876543210.")
+        # No long digit runs — must be spelled digit by digit
+        assert "9876543210" not in result
+        assert "nine" in result.lower()
+
+    def test_ordinal(self):
+        result = self._clean("You are 1st in queue.")
+        assert "1st" not in result
+        assert "first" in result.lower()
+
+    def test_percent(self):
+        result = self._clean("50% off today.")
+        assert "50%" not in result
+        assert "fifty percent" in result.lower()
+
+    def test_decimal(self):
+        result = self._clean("Rating: 3.5 stars.")
+        assert "3.5" not in result
+        assert "three" in result.lower()
+
+    def test_plain_integer(self):
+        result = self._clean("We have 2 slots left.")
+        assert "2" not in result
+        assert "two" in result.lower()
+
+    def test_no_raw_digits_in_combined_reply(self):
+        """A realistic booking-confirmation reply must contain no raw digits."""
+        text = (
+            "**Confirmed!** Your appointment with Dr. Smith is at 6:40 PM "
+            "on 2026-06-20. The fee is ₹500. Your booking ID is 50023. 🏥"
+        )
+        result = self._clean(text)
+        import re
+        assert not re.search(r"\d", result), f"raw digit found: {result!r}"
+
+
+# ===========================================================================
+# 6. build_system_prompt — correct style block per mode
+# ===========================================================================
+
+
+class TestBuildSystemPrompt:
+    def test_ui_mode_contains_markdown_guidance(self):
+        from app.assistant import build_system_prompt
+        prompt = build_system_prompt("2026-06-20 (Saturday)", "10:00", "Asia/Kolkata", "ui")
+        assert "markdown" in prompt.lower() or "emoji" in prompt.lower()
+
+    def test_tts_mode_contains_spoken_guidance(self):
+        from app.assistant import build_system_prompt
+        prompt = build_system_prompt("2026-06-20 (Saturday)", "10:00", "Asia/Kolkata", "tts")
+        assert "tts" in prompt.lower() or "spoken" in prompt.lower() or "voice" in prompt.lower()
+
+    def test_tts_mode_forbids_markdown(self):
+        from app.assistant import build_system_prompt
+        prompt = build_system_prompt("2026-06-20 (Saturday)", "10:00", "Asia/Kolkata", "tts")
+        assert "no markdown" in prompt.lower() or "NO markdown" in prompt
+
+    def test_unknown_mode_falls_back_to_ui(self):
+        from app.assistant import build_system_prompt
+        prompt = build_system_prompt("2026-06-20 (Saturday)", "10:00", "Asia/Kolkata", "invalid")
+        # Should not crash; should be identical to ui mode
+        ui_prompt = build_system_prompt("2026-06-20 (Saturday)", "10:00", "Asia/Kolkata", "ui")
+        assert prompt == ui_prompt
+
+
+# ===========================================================================
+# 7. REST /chat — response_mode field
+# ===========================================================================
+
+
+class TestPostChatTtsMode:
+    def test_tts_mode_sanitizes_markdown_in_reply(self, client):
+        """When response_mode=tts, markdown in the agent reply is stripped."""
+        with mock_agent_reply("**Confirmed!** See Dr. Smith at 6:40 PM. 🏥"):
+            response = client.post(
+                "/chat",
+                json={"user_message": "book it", "response_mode": "tts"},
+            )
+        reply = response.json()["reply"]
+        assert "**" not in reply
+        assert "🏥" not in reply
+
+    def test_tts_mode_converts_digits_to_words(self, client):
+        """When response_mode=tts, raw digits are spelled as words."""
+        with mock_agent_reply("Your slot is at 9:00 AM and costs ₹500."):
+            response = client.post(
+                "/chat",
+                json={"user_message": "any slot", "response_mode": "tts"},
+            )
+        reply = response.json()["reply"]
+        import re
+        assert not re.search(r"\d", reply), f"raw digit found: {reply!r}"
+
+    def test_ui_mode_preserves_markdown(self, client):
+        """Default (ui) mode must NOT sanitize the reply."""
+        raw = "**Confirmed!** 🏥 Slot at 9:00 AM."
+        with mock_agent_reply(raw):
+            response = client.post(
+                "/chat",
+                json={"user_message": "book it"},
+            )
+        assert response.json()["reply"] == raw
+
+    def test_invalid_mode_defaults_to_ui(self, client):
+        """An unrecognised response_mode must not raise an error."""
+        raw = "**Bold reply**"
+        with mock_agent_reply(raw):
+            response = client.post(
+                "/chat",
+                json={"user_message": "hello", "response_mode": "banana"},
+            )
+        assert response.status_code == 200
+        assert response.json()["reply"] == raw
+
+
+# ===========================================================================
+# 8. WebSocket — mode query param + runtime mode switch
+# ===========================================================================
+
+
+class TestWebSocketMode:
+    def test_connect_tts_mode_included_in_greeting(self, client):
+        with client.websocket_connect("/ws/chat?mode=tts") as ws:
+            greeting = ws.receive_json()
+        assert greeting.get("mode") == "tts"
+
+    def test_connect_default_mode_is_ui(self, client):
+        with client.websocket_connect("/ws/chat") as ws:
+            greeting = ws.receive_json()
+        assert greeting.get("mode") == "ui"
+
+    def test_tts_mode_sanitizes_ws_reply(self, client):
+        with mock_agent_reply("**Hello!** Your slot is at 6:40 PM. 🏥"):
+            with client.websocket_connect("/ws/chat?mode=tts") as ws:
+                ws.receive_json()  # greeting
+                ws.send_text("hi")
+                reply = ws.receive_json()
+        assert "**" not in reply["message"]
+        assert "🏥" not in reply["message"]
+
+    def test_tts_mode_ws_digits_spelled(self, client):
+        with mock_agent_reply("Fee: ₹500 at 9:00 AM."):
+            with client.websocket_connect("/ws/chat?mode=tts") as ws:
+                ws.receive_json()
+                ws.send_text("any slot")
+                reply = ws.receive_json()
+        import re
+        assert not re.search(r"\d", reply["message"]), f"digit found: {reply['message']!r}"
+
+    def test_runtime_mode_switch_command(self, client):
+        """Sending 'mode: tts' mid-conversation switches mode and acks."""
+        with client.websocket_connect("/ws/chat") as ws:
+            ws.receive_json()  # greeting (ui mode)
+            ws.send_text("mode: tts")
+            ack = ws.receive_json()
+        assert ack["type"] == "system"
+        assert ack.get("mode") == "tts"
+
+    def test_ui_mode_preserves_markdown_in_ws(self, client):
+        raw = "**Bold!** 🏥 Slot at 9:00 AM."
+        with mock_agent_reply(raw):
+            with client.websocket_connect("/ws/chat") as ws:  # default ui
+                ws.receive_json()
+                ws.send_text("hi")
+                reply = ws.receive_json()
+        assert reply["message"] == raw
+
+
+# ===========================================================================
+# 9. Phase 2 — _extract_patient_phone helper (unit tests)
+# ===========================================================================
+
+
+class TestExtractPatientPhone:
+    """Unit tests for the _extract_patient_phone helper in app/api.py."""
+
+    def _extract(self, messages):
+        from app.api import _extract_patient_phone
+        return _extract_patient_phone(messages)
+
+    def _tool_msg(self, content: dict) -> dict:
+        return {"role": "tool", "content": json.dumps(content)}
+
+    def test_returns_phone_from_identify_patient_result(self):
+        msgs = [
+            {"role": "user", "content": "hi"},
+            self._tool_msg({"status": "found", "patient": {"phone": "9876543210", "name": "Alice"}}),
+        ]
+        assert self._extract(msgs) == "9876543210"
+
+    def test_returns_none_when_no_tool_messages(self):
+        msgs = [
+            {"role": "system", "content": "You are MedBook."},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "What is your phone?"},
+        ]
+        assert self._extract(msgs) is None
+
+    def test_returns_none_when_patient_key_missing(self):
+        msgs = [self._tool_msg({"status": "ok", "data": {}})]
+        assert self._extract(msgs) is None
+
+    def test_returns_none_when_phone_is_none(self):
+        msgs = [self._tool_msg({"status": "found", "patient": {"phone": None}})]
+        assert self._extract(msgs) is None
+
+    def test_returns_none_for_malformed_json(self):
+        msgs = [{"role": "tool", "content": "not-json"}]
+        assert self._extract(msgs) is None
+
+    def test_scans_only_last_ten_messages(self):
+        """Phone in message 1 of a 12-message list should NOT be found (outside window)."""
+        old_tool = self._tool_msg({"status": "found", "patient": {"phone": "1111111111"}})
+        filler = [{"role": "user", "content": "x"}] * 11
+        msgs = [old_tool] + filler
+        assert self._extract(msgs) is None
+
+    def test_most_recent_phone_wins(self):
+        """The most recently identified phone takes priority."""
+        msgs = [
+            self._tool_msg({"status": "found", "patient": {"phone": "1111111111"}}),
+            self._tool_msg({"status": "found", "patient": {"phone": "9999999999"}}),
+        ]
+        assert self._extract(msgs) == "9999999999"
+
+    def test_non_tool_messages_with_patient_key_ignored(self):
+        """assistant/user messages that happen to contain 'patient' are not parsed."""
+        msgs = [
+            {"role": "assistant", "content": json.dumps({"patient": {"phone": "1234567890"}})},
+        ]
+        assert self._extract(msgs) is None
+
+    def test_empty_messages_list(self):
+        assert self._extract([]) is None
+
+    def test_phone_returned_as_string(self):
+        msgs = [self._tool_msg({"patient": {"phone": 9876543210}})]
+        result = self._extract(msgs)
+        assert isinstance(result, str)
+        assert result == "9876543210"
+
+
+# ===========================================================================
+# 10. Phase 2 — auto_ingest triggered in REST and WS handlers
+# ===========================================================================
+
+
+class TestAutoIngest:
+    """Verify auto_ingest is fired (fire-and-forget) when a patient phone is known."""
+
+    def _tool_msg(self, phone: str) -> dict:
+        return {
+            "role": "tool",
+            "content": json.dumps({"status": "found", "patient": {"phone": phone}}),
+        }
+
+    def test_rest_auto_ingest_called_when_phone_found(self, client):
+        """POST /chat schedules auto_ingest when identify_patient tool result is in history."""
+        prior_messages = [
+            {"role": "system", "content": "You are MedBook."},
+            self._tool_msg("9876543210"),
+        ]
+
+        with patch("app.api._schedule_auto_ingest") as mock_schedule, \
+             mock_agent_reply("Great, booking confirmed!"):
+            client.post(
+                "/chat",
+                json={"user_message": "book it", "messages": prior_messages},
+            )
+
+        mock_schedule.assert_called_once()
+        _, user_msg, reply, phone = mock_schedule.call_args.args
+        assert phone == "9876543210"
+        assert user_msg == "book it"
+
+    def test_rest_auto_ingest_not_called_without_phone(self, client):
+        """POST /chat must NOT schedule auto_ingest when no phone has been discovered."""
+        with patch("app.api._schedule_auto_ingest") as mock_schedule, \
+             mock_agent_reply("What is your phone number?"):
+            client.post("/chat", json={"user_message": "I have a headache"})
+
+        mock_schedule.assert_not_called()
+
+    def test_ws_auto_ingest_called_when_phone_in_history(self, client):
+        """WS handler schedules auto_ingest after agent_loop when phone is discoverable."""
+        tool_result = json.dumps({"status": "found", "patient": {"phone": "8888888888"}})
+
+        async def fake_loop(llm, db, memory, messages, user_msg):
+            messages.append({"role": "tool", "content": tool_result})
+            return "Found your profile!"
+
+        with patch("app.api._schedule_auto_ingest") as mock_schedule, \
+             patch("app.api.agent_loop", new=fake_loop):
+            with client.websocket_connect("/ws/chat") as ws:
+                ws.receive_json()
+                ws.send_text("My number is 8888888888")
+                ws.receive_json()
+
+        mock_schedule.assert_called_once()
+        _, user_msg, reply, phone = mock_schedule.call_args.args
+        assert phone == "8888888888"
+
+
+# ===========================================================================
+# 11. Phase 2 — typed recall methods called by tools
+# ===========================================================================
+
+
+class TestTypedRecall:
+    """Verify tools.py routes to the correct memory method for typed retrieval."""
+
+    def test_recall_patient_history_uses_typed_method(self):
+        """_recall_patient_history must call recall_patient_facts, not the legacy recall."""
+        import asyncio
+
+        import app.tools as tools_module
+
+        mock_mem = AsyncMock()
+        mock_mem.recall_patient_facts = AsyncMock(return_value=["Patient prefers evening slots"])
+        mock_mem.recall = AsyncMock(return_value=[])
+
+        # Signature: _recall_patient_history(memory, phone, query)
+        asyncio.new_event_loop().run_until_complete(
+            tools_module._recall_patient_history(mock_mem, "9876543210", "allergies preferences")
+        )
+
+        mock_mem.recall_patient_facts.assert_called_once()
+        mock_mem.recall.assert_not_called()
+
+    def test_suggest_speciality_uses_medical_knowledge_method(self):
+        """_suggest_speciality must call recall_medical_knowledge, not the legacy recall."""
+        import asyncio
+
+        import app.tools as tools_module
+
+        mock_db = AsyncMock()
+        mock_db.get_all_specialities = AsyncMock(return_value=["Cardiology"])
+        mock_mem = AsyncMock()
+        mock_mem.recall_medical_knowledge = AsyncMock(return_value=["Cardiologist for chest pain"])
+        mock_mem.recall = AsyncMock(return_value=[])
+
+        # Signature: _suggest_speciality(db, memory, symptoms, age=None, gender=None)
+        asyncio.new_event_loop().run_until_complete(
+            tools_module._suggest_speciality(mock_db, mock_mem, "chest pain")
+        )
+
+        mock_mem.recall_medical_knowledge.assert_called_once()
+        mock_mem.recall.assert_not_called()
