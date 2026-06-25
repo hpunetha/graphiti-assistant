@@ -5,3 +5,5 @@ __pycache__/
 venv/
 neo4j_data/
 *.log
+.claude/
+.vscode/
